@@ -30,12 +30,13 @@ export class LiveKitService {
     return await at.toJwt();
   }
 
-  async createRoom(roomName: string): Promise<any> {
+  async createRoom(roomName: string, metadata?: Record<string, any>): Promise<any> {
     try {
       const room = await this.roomService.createRoom({
         name: roomName,
         emptyTimeout: 300,
         maxParticipants: 10,
+        metadata: metadata ? JSON.stringify(metadata) : undefined,
       });
       return room;
     } catch (error) {

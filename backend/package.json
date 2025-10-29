@@ -16,15 +16,20 @@
   "dependencies": {
     "@nestjs/common": "^11.1.8",
     "@nestjs/core": "^11.1.8",
+    "@nestjs/mongoose": "^11.0.3",
     "@nestjs/platform-express": "^11.1.8",
+    "bcryptjs": "^3.0.2",
     "dotenv": "^17.2.3",
+    "jsonwebtoken": "^9.0.2",
     "livekit-server-sdk": "^2.14.0",
+    "mongoose": "^8.19.2",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.10",
     "@nestjs/schematics": "^11.0.9",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^24.9.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

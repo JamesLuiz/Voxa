@@ -4,9 +4,8 @@
 
 body {
   margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -14,3 +13,55 @@ body {
 * {
   box-sizing: border-box;
 }
+
+:root {
+  --primary: #6366f1;
+  --primary-dark: #4f46e5;
+  --secondary: #8b5cf6;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --bg-dark: #0f172a;
+  --bg-light: #ffffff;
+  --card-dark: #1e293b;
+  --card-light: #f8fafc;
+  --text-dark: #e2e8f0;
+  --text-light: #1e293b;
+  --border: #334155;
+  --glass: rgba(255, 255, 255, 0.05);
+}
+
+html, body, #root { height: 100%; }
+
+.bg-dark { background-color: var(--bg-dark); }
+.text-primary { color: var(--primary); }
+
+.card-glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+.btn-gradient {
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+  transition: transform 0.2s;
+}
+.btn-gradient:hover { transform: translateY(-2px); }
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+/* Animations */
+.fade-in { animation: fadeIn .3s ease both; }
+.slide-up { animation: slideUp .25s ease both; }
+.pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+@keyframes slideUp { from { transform: translateY(8px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
+@keyframes pulse { 0%, 100% { transform: scale(1) } 50% { transform: scale(1.05) } }

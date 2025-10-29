@@ -228,7 +228,7 @@ async def create_ticket(
         }
         
         response = requests.post(
-            f"{backend_url}/api/crm/tickets",
+            f"{backend_url}/api/tickets",
             json=ticket_data,
             headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
             timeout=10
@@ -275,7 +275,7 @@ async def schedule_meeting(
         }
         
         response = requests.post(
-            f"{backend_url}/api/scheduling/meetings",
+            f"{backend_url}/api/meetings",
             json=meeting_data,
             headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
             timeout=10
@@ -292,3 +292,70 @@ async def schedule_meeting(
     except Exception as e:
         logger.warning(f"Error scheduling meeting: {e}")
         return f"An error occurred while scheduling meeting: {str(e)}"
+
+# -------------------- NEW TOOLS (Phase 2) --------------------
+
+@function_tool()
+async def get_business_context(context: RunContext, business_id: str) -> str:
+    """Fetch business description, products, policies for AI context"""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        resp = requests.get(f"{backend_url}/api/business/context/{business_id}", timeout=10)
+        if resp.status_code == 200:
+            return resp.text
+        return "{}"
+    except Exception as e:
+        logger.warning(f"Error fetching business context: {e}")
+        return "{}"
+
+@function_tool()
+async def manage_customer(context: RunContext, action: str, data: dict) -> str:
+    """CRM: 'create', 'update', 'delete', 'search' customers"""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        if action == 'create':
+            r = requests.post(f"{backend_url}/api/crm/customers", json=data, timeout=10)
+            return r.text
+        if action == 'update':
+            r = requests.put(f"{backend_url}/api/crm/customers/{data.get('id')}", json=data, timeout=10)
+            return r.text
+        if action == 'delete':
+            import requests as rq
+            r = rq.delete(f"{backend_url}/api/crm/customers/{data.get('id')}", timeout=10)
+            return r.text
+        if action == 'search':
+            q = data.get('q', '')
+            business_id = data.get('businessId', '')
+            r = requests.get(f"{backend_url}/api/crm/customers/search", params={"q": q, "businessId": business_id}, timeout=10)
+            return r.text
+        return "{}"
+    except Exception as e:
+        logger.warning(f"manage_customer error: {e}")
+        return "{}"
+
+@function_tool()
+async def update_ticket(context: RunContext, ticket_id: str, status: str, notes: str = "") -> str:
+    """Update ticket status (owner only)"""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        out = {}
+        r = requests.put(f"{backend_url}/api/tickets/{ticket_id}/status", json={"status": status}, timeout=10)
+        out['status'] = r.json()
+        if notes:
+            r2 = requests.post(f"{backend_url}/api/tickets/{ticket_id}/notes", json={"note": notes}, timeout=10)
+            out['note'] = r2.json()
+        return str(out)
+    except Exception as e:
+        logger.warning(f"update_ticket error: {e}")
+        return "{}"
+
+@function_tool()
+async def get_analytics(context: RunContext, metric: str, business_id: str) -> str:
+    """Get business metrics: 'overview'|'tickets'|'customers'"""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        r = requests.get(f"{backend_url}/api/analytics/{metric}", params={"businessId": business_id}, timeout=10)
+        return r.text
+    except Exception as e:
+        logger.warning(f"get_analytics error: {e}")
+        return "{}"

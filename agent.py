@@ -16,6 +16,10 @@ from tools import (
     create_ticket,
     schedule_meeting,
     get_customer_history,
+    get_business_context,
+    manage_customer,
+    update_ticket,
+    get_analytics,
 )
 
 # ------------------ SETUP ------------------
@@ -75,9 +79,9 @@ def update_history(role: str, content: str):
 
 # ------------------ ASSISTANT ------------------
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, instructions: str) -> None:
         super().__init__(
-            instructions=AGENT_INSTRUCTION,
+            instructions=instructions,
             llm=google.beta.realtime.RealtimeModel(
                 voice="Aoede",
                 temperature=0.8,
@@ -90,6 +94,10 @@ class Assistant(Agent):
                 create_ticket,
                 schedule_meeting,
                 get_customer_history,
+                get_business_context,
+                manage_customer,
+                update_ticket,
+                get_analytics,
             ],
         )
     
@@ -138,9 +146,40 @@ async def entrypoint(ctx: agents.JobContext):
     
     session = AgentSession()
     
+    # Extract business and role metadata
+    business_id = None
+    user_role = None
+    try:
+        business_id = (ctx.room.metadata or {}).get('businessId')
+        user_role = (ctx.room.metadata or {}).get('role')  # 'owner' or 'customer'
+    except Exception:
+        pass
+
+    # Fetch business context for prompt
+    agent_prompt = AGENT_INSTRUCTION
+    try:
+        if business_id:
+            # tools.get_business_context returns raw JSON text; parse minimally
+            import json as _json
+            raw = await get_business_context.run(None, business_id)
+            data = _json.loads(raw) if raw else {}
+            agent_prompt = AGENT_INSTRUCTION.format(
+                business_name=data.get('name', 'Your Business'),
+                business_description=data.get('description', ''),
+                products_list='\n'.join(data.get('products', [])),
+                business_policies=data.get('policies', ''),
+                is_owner=(user_role == 'owner'),
+                agent_tone=(data.get('agentConfig', {}) or {}).get('tone', 'professional'),
+                response_style=(data.get('agentConfig', {}) or {}).get('responseStyle', 'concise'),
+                business_hours=(data.get('agentConfig', {}) or {}).get('businessHours', {}),
+                custom_prompt=(data.get('agentConfig', {}) or {}).get('customPrompt', ''),
+            )
+    except Exception as e:
+        logger.warning(f"Failed to build agent prompt: {e}")
+
     await session.start(
         room=ctx.room,
-        agent=Assistant(),
+        agent=Assistant(agent_prompt),
         room_input_options=RoomInputOptions(
             video_enabled=True,
             noise_cancellation=noise_cancellation.BVC(),

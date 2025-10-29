@@ -18,11 +18,22 @@ export class AppController {
   }
 
   @Post('/rooms/create')
-  async createRoom(@Body() body: { roomName?: string; participantName?: string }) {
+  async createRoom(
+    @Body()
+    body: {
+      roomName?: string;
+      participantName?: string;
+      businessId?: string;
+      role?: 'owner' | 'customer';
+    },
+  ) {
     const roomName = body.roomName || `room-${Date.now()}`;
     const participantName = body.participantName || 'guest';
 
-    await this.liveKitService.createRoom(roomName);
+    await this.liveKitService.createRoom(roomName, {
+      businessId: body.businessId,
+      role: body.role,
+    });
     const token = await this.liveKitService.createToken(roomName, participantName);
 
     return {
