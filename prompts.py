@@ -30,7 +30,7 @@ TONE: {agent_tone}
 STYLE: {response_style}
 CUSTOM: {custom_prompt}
 
-Always acknowledge tasks: "Will do, Sir" / "Check!" / "Roger Boss"
+Always acknowledge tasks: "Will do, Sir" / "Check!"
 Then execute and confirm in ONE short sentence.
 """
 
