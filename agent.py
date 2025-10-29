@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import os
 import logging
+import sys
 from mistralai import Mistral
 
 from livekit import agents
@@ -19,7 +20,44 @@ from tools import (
 
 # ------------------ SETUP ------------------
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+
+# Configure logging based on environment
+def setup_logging():
+    """Setup logging configuration based on execution mode"""
+    # Check if running in development/console mode
+    is_console_mode = any(arg in sys.argv for arg in ['console', 'dev', '--dev', '--console'])
+    
+    if is_console_mode:
+        # Full logging for console/dev mode
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+    else:
+        # Only warnings and errors for prod/start
+        logging.basicConfig(
+            level=logging.WARNING,
+            format='%(asctime)s - %(levelname)s - %(message)s'
+        )
+        
+        # Aggressively suppress ALL external library logs in prod mode
+        for logger_name in ['livekit', 'livekit.agents', 'mistralai', 'httpx', 'httpcore', 
+                           'urllib3', 'google', 'openai', 'langchain']:
+            logging.getLogger(logger_name).setLevel(logging.ERROR)
+            logging.getLogger(logger_name).propagate = False
+
+setup_logging()
+
+# Disable LiveKit's internal logging in production
+if 'start' in sys.argv or 'prod' in sys.argv:
+    # Set root logger to ERROR to catch everything
+    logging.getLogger().setLevel(logging.ERROR)
+    
+    # Create our own logger for warnings only
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.WARNING)
+else:
+    logger = logging.getLogger(__name__)
 
 # Initialize Mistral client (NEW API)
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
@@ -66,7 +104,7 @@ class Assistant(Agent):
             query: The question or problem that requires advanced reasoning
         """
         try:
-            logging.info(f"🧠 Using Mistral for deep reasoning: {query[:50]}...")
+            logger.debug(f"Using Mistral for deep reasoning: {query[:50]}...")
             
             # Build context from conversation history
             messages = [
@@ -81,7 +119,7 @@ class Assistant(Agent):
             )
             
             response = completion.choices[0].message.content
-            logging.info("✅ Mistral reasoning complete")
+            logger.debug("Mistral reasoning complete")
             
             # Update history
             update_history("user", query)
@@ -90,13 +128,13 @@ class Assistant(Agent):
             return response
             
         except Exception as e:
-            logging.error(f"❌ Mistral reasoning failed: {e}")
+            logger.warning(f"Mistral reasoning failed: {e}")
             return f"I encountered an error while processing that request: {str(e)}"
 
 
 # ------------------ ENTRYPOINT ------------------
 async def entrypoint(ctx: agents.JobContext):
-    logging.info(f"🎧 Agent joining room: {ctx.room.name}")
+    logger.debug(f"Agent joining room: {ctx.room.name}")
     
     session = AgentSession()
     
@@ -114,7 +152,7 @@ async def entrypoint(ctx: agents.JobContext):
     # Initial welcome message
     await session.generate_reply(instructions=SESSION_INSTRUCTION)
     
-    logging.info("🤖 Agent ready for conversation.")
+    logger.debug("Agent ready for conversation.")
 
 
 if __name__ == "__main__":

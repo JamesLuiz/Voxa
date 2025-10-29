@@ -8,6 +8,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
+# Configure logger for this module
+logger = logging.getLogger(__name__)
+
 @function_tool()
 async def get_weather(
     context: RunContext,  # type: ignore
@@ -19,13 +22,13 @@ async def get_weather(
         response = requests.get(
             f"https://wttr.in/{city}?format=3")
         if response.status_code == 200:
-            logging.info(f"Weather for {city}: {response.text.strip()}")
+            logger.debug(f"Weather for {city}: {response.text.strip()}")
             return response.text.strip()   
         else:
-            logging.error(f"Failed to get weather for {city}: {response.status_code}")
+            logger.warning(f"Failed to get weather for {city}: {response.status_code}")
             return f"Could not retrieve weather for {city}."
     except Exception as e:
-        logging.error(f"Error retrieving weather for {city}: {e}")
+        logger.warning(f"Error retrieving weather for {city}: {e}")
         return f"An error occurred while retrieving weather for {city}." 
 
 @function_tool()
@@ -37,10 +40,10 @@ async def search_web(
     """
     try:
         results = DuckDuckGoSearchRun().run(tool_input=query)
-        logging.info(f"Search results for '{query}': {results}")
+        logger.debug(f"Search results for '{query}': {results}")
         return results
     except Exception as e:
-        logging.error(f"Error searching the web for '{query}': {e}")
+        logger.warning(f"Error searching the web for '{query}': {e}")
         return f"An error occurred while searching the web for '{query}'."    
 
 @function_tool()    
@@ -70,7 +73,7 @@ async def send_email(
         gmail_password = os.getenv("GMAIL_APP_PASSWORD")  # Use App Password, not regular password
         
         if not gmail_user or not gmail_password:
-            logging.error("Gmail credentials not found in environment variables")
+            logger.warning("Gmail credentials not found in environment variables")
             return "Email sending failed: Gmail credentials not configured."
         
         # Create message
@@ -98,17 +101,17 @@ async def send_email(
         server.sendmail(gmail_user, recipients, text)
         server.quit()
         
-        logging.info(f"Email sent successfully to {to_email}")
+        logger.debug(f"Email sent successfully to {to_email}")
         return f"Email sent successfully to {to_email}"
         
     except smtplib.SMTPAuthenticationError:
-        logging.error("Gmail authentication failed")
+        logger.warning("Gmail authentication failed")
         return "Email sending failed: Authentication error. Please check your Gmail credentials."
     except smtplib.SMTPException as e:
-        logging.error(f"SMTP error occurred: {e}")
+        logger.warning(f"SMTP error occurred: {e}")
         return f"Email sending failed: SMTP error - {str(e)}"
     except Exception as e:
-        logging.error(f"Error sending email: {e}")
+        logger.warning(f"Error sending email: {e}")
         return f"An error occurred while sending email: {str(e)}"
 
 @function_tool()
@@ -132,7 +135,7 @@ async def crm_lookup(
         
         if response.status_code == 200:
             customer = response.json()
-            logging.info(f"Found customer: {customer.get('name', 'Unknown')}")
+            logger.debug(f"Found customer: {customer.get('name', 'Unknown')}")
             
             # Format customer information
             info = f"Customer: {customer.get('name', 'Unknown')}\n"
@@ -142,11 +145,11 @@ async def crm_lookup(
             
             return info
         else:
-            logging.warning(f"Customer not found for email: {email}")
+            logger.warning(f"Customer not found for email: {email}")
             return f"Customer not found for email: {email}"
             
     except Exception as e:
-        logging.error(f"Error looking up customer: {e}")
+        logger.warning(f"Error looking up customer: {e}")
         return f"An error occurred while looking up customer: {str(e)}"
 
 @function_tool()
@@ -194,7 +197,7 @@ async def get_customer_history(
         return history
         
     except Exception as e:
-        logging.error(f"Error getting customer history: {e}")
+        logger.warning(f"Error getting customer history: {e}")
         return f"An error occurred while fetching customer history: {str(e)}"
 
 @function_tool()
@@ -233,14 +236,14 @@ async def create_ticket(
         
         if response.status_code == 200 or response.status_code == 201:
             ticket = response.json()
-            logging.info(f"Created ticket: {ticket.get('_id')}")
+            logger.debug(f"Created ticket: {ticket.get('_id')}")
             return f"Support ticket created successfully. Ticket ID: {ticket.get('_id', 'N/A')}"
         else:
-            logging.error(f"Failed to create ticket: {response.status_code}")
+            logger.warning(f"Failed to create ticket: {response.status_code}")
             return "Failed to create support ticket"
             
     except Exception as e:
-        logging.error(f"Error creating ticket: {e}")
+        logger.warning(f"Error creating ticket: {e}")
         return f"An error occurred while creating ticket: {str(e)}"
 
 @function_tool()
@@ -280,12 +283,12 @@ async def schedule_meeting(
         
         if response.status_code == 200 or response.status_code == 201:
             meeting = response.json()
-            logging.info(f"Created meeting: {meeting.get('_id')}")
+            logger.debug(f"Created meeting: {meeting.get('_id')}")
             return f"Meeting scheduled successfully: {title} at {start_time}"
         else:
-            logging.error(f"Failed to create meeting: {response.status_code}")
+            logger.warning(f"Failed to create meeting: {response.status_code}")
             return "Failed to schedule meeting"
             
     except Exception as e:
-        logging.error(f"Error scheduling meeting: {e}")
+        logger.warning(f"Error scheduling meeting: {e}")
         return f"An error occurred while scheduling meeting: {str(e)}"
