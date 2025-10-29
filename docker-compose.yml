@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:latest
+    container_name: voxa-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: voxa
+    networks:
+      - voxa-network
+
+  livekit:
+    image: livekit/livekit:latest
+    container_name: voxa-livekit
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-60000:50000-60000/udp"
+    environment:
+      LIVEKIT_KEYS: |
+        api_key_here:api_secret_here
+    command: livekit-server --dev
+    networks:
+      - voxa-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: voxa-backend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongodb:27017/voxa
+      - JWT_SECRET=${JWT_SECRET}
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+    depends_on:
+      - mongodb
+      - livekit
+    networks:
+      - voxa-network
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    container_name: voxa-agent
+    environment:
+      - LIVEKIT_URL=ws://livekit:7880
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BACKEND_URL=http://backend:3000
+      - BACKEND_API_KEY=${BACKEND_API_KEY}
+    depends_on:
+      - backend
+      - livekit
+    networks:
+      - voxa-network
+
+  frontend:
+    build:
+      context: ./voxa-flow
+      dockerfile: Dockerfile
+    container_name: voxa-frontend
+    ports:
+      - "80:80"
+    environment:
+      - VITE_BACKEND_URL=http://localhost:3000
+      - VITE_LIVEKIT_URL=ws://localhost:7880
+    depends_on:
+      - backend
+    networks:
+      - voxa-network
+
+volumes:
+  mongodb_data:
+
+networks:
+  voxa-network:
+    driver: bridge
