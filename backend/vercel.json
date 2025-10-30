@@ -2,9 +2,9 @@
   "version": 2,
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
-  "builds": [
-    { "src": "api/index.ts", "use": "@vercel/node@2.9.1" }
-  ],
+  "functions": {
+    "api/index.ts": { "runtime": "nodejs22.x" }
+  },
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.ts" },
     { "src": "/(.*)", "dest": "/api/index.ts" }
