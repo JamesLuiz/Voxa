@@ -109,7 +109,7 @@ const VoiceCall = () => {
           >
             <div className="h-full grid grid-rows-[1fr_auto]">
               <div className="p-3 overflow-hidden">
-                <GridLayout>
+                <GridLayout tracks={[]}>
                   <ParticipantTile />
                 </GridLayout>
               </div>

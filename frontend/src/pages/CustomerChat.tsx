@@ -135,7 +135,7 @@ const CustomerChat = () => {
                   >
                     <div className="h-full grid grid-rows-[1fr_auto]">
                       <div className="p-3">
-                        <GridLayout>
+                        <GridLayout tracks={[]}>
                           <ParticipantTile />
                         </GridLayout>
                       </div>
