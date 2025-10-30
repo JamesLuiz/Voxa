@@ -66,15 +66,60 @@ else:
 # Initialize Mistral client (NEW API)
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
-# Conversation memory
-conversation_history = []
+# Conversation memory scoped by room name so reconnecting participants
+# (even with a new identity) can pick up prior context for the same room.
+conversation_histories: dict = {}
 HISTORY_LIMIT = 10
 
-def update_history(role: str, content: str):
-    """Update conversation history with memory management."""
-    conversation_history.append({"role": role, "content": content})
-    if len(conversation_history) > HISTORY_LIMIT:
-        conversation_history.pop(0)
+# Redis client (optional). If REDIS_URL is set and redis package is available,
+# we'll persist room histories to Redis so they survive agent restarts and can
+# be shared across workers.
+try:
+    import redis as _redis
+    _redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+    try:
+        redis_client = _redis.from_url(_redis_url)
+    except Exception:
+        # older redis versions: StrictRedis
+        redis_client = _redis.StrictRedis.from_url(_redis_url)
+except Exception:
+    redis_client = None
+
+
+def get_room_history(room_name: str):
+    if room_name not in conversation_histories:
+        # Try to load from Redis if available
+        if redis_client:
+            try:
+                raw = redis_client.get(f"voxa:history:{room_name}")
+                if raw:
+                    try:
+                        import json as _json
+                        conversation_histories[room_name] = _json.loads(raw)
+                    except Exception:
+                        conversation_histories[room_name] = []
+                else:
+                    conversation_histories[room_name] = []
+            except Exception:
+                conversation_histories[room_name] = []
+        else:
+            conversation_histories[room_name] = []
+    return conversation_histories[room_name]
+
+
+def update_history(room_name: str, role: str, content: str):
+    """Update conversation history for a specific room with size limit."""
+    hist = get_room_history(room_name)
+    hist.append({"role": role, "content": content})
+    if len(hist) > HISTORY_LIMIT:
+        hist.pop(0)
+    # Persist to Redis (best-effort)
+    if redis_client:
+        try:
+            import json as _json
+            redis_client.set(f"voxa:history:{room_name}", _json.dumps(hist))
+        except Exception:
+            logger.debug('Failed to persist room history to Redis')
 
 
 # ------------------ ASSISTANT ------------------
@@ -113,28 +158,40 @@ class Assistant(Agent):
         """
         try:
             logger.debug(f"Using Mistral for deep reasoning: {query[:50]}...")
-            
-            # Build context from conversation history
-            messages = [
-                {"role": "system", "content": "You are an expert reasoning assistant. Provide clear, logical, and detailed analysis."},
-                *conversation_history[-5:],  # Include recent context
-                {"role": "user", "content": query}
-            ]
-            
+
+            # Attempt to derive room name from run_ctx if present so we can
+            # include room-scoped history. Fall back to global short history.
+            room_name = getattr(run_ctx, 'room', None)
+            if room_name is not None and hasattr(room_name, 'name'):
+                room_name = room_name.name
+
+            messages = [{"role": "system", "content": "You are an expert reasoning assistant. Provide clear, logical, and detailed analysis."}]
+
+            if room_name:
+                hist = get_room_history(room_name)
+                # include up to last 5 messages
+                messages.extend(hist[-5:])
+            else:
+                # fallback: no room scope available
+                messages.extend([])
+
+            messages.append({"role": "user", "content": query})
+
             completion = mistral_client.chat.complete(
                 model="mistral-medium",
                 messages=messages,
             )
-            
+
             response = completion.choices[0].message.content
             logger.debug("Mistral reasoning complete")
-            
-            # Update history
-            update_history("user", query)
-            update_history("assistant", response)
-            
+
+            # Update room history if possible
+            if room_name:
+                update_history(room_name, "user", query)
+                update_history(room_name, "assistant", response)
+
             return response
-            
+
         except Exception as e:
             logger.warning(f"Mistral reasoning failed: {e}")
             return f"I encountered an error while processing that request: {str(e)}"
@@ -177,21 +234,147 @@ async def entrypoint(ctx: agents.JobContext):
     except Exception as e:
         logger.warning(f"Failed to build agent prompt: {e}")
 
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(agent_prompt),
-        room_input_options=RoomInputOptions(
-            video_enabled=True,
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
-    
-    await ctx.connect()
-    
-    # Initial welcome message
-    await session.generate_reply(instructions=SESSION_INSTRUCTION)
-    
-    logger.debug("Agent ready for conversation.")
+    try:
+        await session.start(
+            room=ctx.room,
+            agent=Assistant(agent_prompt),
+            room_input_options=RoomInputOptions(
+                video_enabled=True,
+                noise_cancellation=noise_cancellation.BVC(),
+            ),
+        )
+
+        # Connect to the job context. This yields until the room/job ends.
+        await ctx.connect()
+
+        # Initial welcome message
+        try:
+            await session.generate_reply(instructions=SESSION_INSTRUCTION)
+        except Exception:
+            # non-fatal: log and continue; don't allow a single failure to stop the worker
+            logger.exception('Failed to generate initial reply')
+
+        # Register a defensive handler for room data messages so the agent can
+        # handle text messages forwarded from the backend. Different versions
+        # of the LiveKit agent/room object expose different subscription APIs,
+        # so we try a few common ones.
+        async def _handle_incoming_data(payload, participant=None):
+            try:
+                # payload may be bytes or str or already-decoded
+                text = None
+                raw = None
+                if isinstance(payload, (bytes, bytearray)):
+                    try:
+                        raw = payload.decode('utf-8')
+                    except Exception:
+                        raw = None
+                elif isinstance(payload, str):
+                    raw = payload
+                elif hasattr(payload, 'data'):
+                    # some SDKs wrap a packet with .data
+                    try:
+                        raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
+                    except Exception:
+                        raw = None
+
+                if raw:
+                    import json as _json
+                    try:
+                        obj = _json.loads(raw)
+                    except Exception:
+                        obj = None
+
+                    if obj and obj.get('type') == 'text_message' and obj.get('text'):
+                        text = obj.get('text')
+
+                if not text:
+                    # nothing for us to do
+                    return
+
+                # update room-scoped history
+                try:
+                    rname = getattr(ctx.room, 'name', None)
+                except Exception:
+                    rname = None
+                if rname:
+                    update_history(rname, 'user', text)
+
+                # Generate spoken reply using the session helper — keep it robust
+                try:
+                    await session.generate_reply(instructions=text)
+                except Exception:
+                    logger.exception('Failed to generate reply from data message')
+            except Exception:
+                logger.exception('Unhandled error in data message handler')
+
+        # Attempt to attach the handler. Try multiple common hook names.
+        try:
+            attached = False
+            # session.on('data'|'data_received')
+            if hasattr(session, 'on') and callable(getattr(session, 'on')):
+                try:
+                    session.on('data', _handle_incoming_data)
+                    attached = True
+                except Exception:
+                    try:
+                        session.on('data_received', _handle_incoming_data)
+                        attached = True
+                    except Exception:
+                        attached = attached or False
+
+            # session.add_data_listener
+            if not attached and hasattr(session, 'add_data_listener') and callable(getattr(session, 'add_data_listener')):
+                try:
+                    session.add_data_listener(_handle_incoming_data)
+                    attached = True
+                except Exception:
+                    attached = attached or False
+
+            # ctx.room.on
+            if not attached and hasattr(ctx.room, 'on') and callable(getattr(ctx.room, 'on')):
+                try:
+                    ctx.room.on('data', _handle_incoming_data)
+                    attached = True
+                except Exception:
+                    try:
+                        ctx.room.on('data_received', _handle_incoming_data)
+                        attached = True
+                    except Exception:
+                        attached = attached or False
+
+            if not attached:
+                logger.debug('Could not attach data handler to session/room; data messages may be ignored')
+        except Exception:
+            logger.exception('Error while trying to attach data handler')
+
+        logger.debug("Agent ready for conversation.")
+
+        # Wait for the job to finish. Some SDKs provide a wait or block until disconnect
+        # If JobContext exposes an awaitable method for lifecycle, use it; otherwise
+        # rely on ctx to manage the lifetime. We simply return from the entrypoint
+        # when ctx.connect() completes or an exception occurs.
+        # Keep the process alive by not raising exceptions beyond this function.
+        
+    except Exception as e:
+        # Log but don't re-raise; keep the worker process alive
+        logger.exception(f"Unhandled exception in entrypoint for room {ctx.room.name}: {e}")
+    finally:
+        # Ensure session is stopped/closed gracefully but don't kill the process
+        try:
+            if session:
+                # Some session implementations expose stop/close methods
+                if hasattr(session, 'stop') and callable(session.stop):
+                    try:
+                        await session.stop()
+                    except Exception:
+                        logger.debug('session.stop() failed or not needed')
+                elif hasattr(session, 'close') and callable(session.close):
+                    try:
+                        await session.close()
+                    except Exception:
+                        logger.debug('session.close() failed or not needed')
+        except Exception:
+            logger.exception('Error during session cleanup')
 
 
 if __name__ == "__main__":

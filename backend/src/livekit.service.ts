@@ -50,4 +50,33 @@ export class LiveKitService {
   async deleteRoom(roomName: string): Promise<void> {
     await this.roomService.deleteRoom(roomName);
   }
+
+  /**
+   * Attempt to send a data message into a room so agents/participants can
+   * receive text-oriented events. This method is defensive: if the underlying
+   * RoomServiceClient exposes a sendData or sendDataFrame API we use it; if not,
+   * we log and noop.
+   */
+  async sendRoomData(roomName: string, payload: any): Promise<void> {
+    try {
+      const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
+      // Some versions of the SDK expose `sendData` or `sendDataFrame` on roomService.
+      if (typeof (this.roomService as any).sendData === 'function') {
+        await (this.roomService as any).sendData(roomName, Buffer.from(json));
+      } else if (typeof (this.roomService as any).sendDataFrame === 'function') {
+        await (this.roomService as any).sendDataFrame(roomName, Buffer.from(json));
+      } else if (typeof (this.roomService as any).send === 'function') {
+        // fallback to a generic send if present
+        await (this.roomService as any).send(roomName, Buffer.from(json));
+      } else {
+        // SDK doesn't support server-side data sending in this environment
+        // No-op but don't throw so callers can continue.
+        // eslint-disable-next-line no-console
+        console.warn('LiveKit RoomServiceClient has no sendData API available');
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('Failed to send room data', err);
+    }
+  }
 }

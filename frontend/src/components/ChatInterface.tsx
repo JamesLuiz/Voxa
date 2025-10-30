@@ -52,6 +52,15 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
     setInput("");
     setIsTyping(true);
     try {
+      // If the UI provides an onStartVoice handler, trigger it so the
+      // voice session is opened and the agent is present to respond via voice.
+      try {
+        // persist the pending text so the voice room can publish it after connect
+        try { sessionStorage.setItem('voxa_pending_text', userMessage.content); } catch (e) {}
+        onStartVoice && onStartVoice();
+      } catch (e) {
+        // ignore errors from voice starter
+      }
       let reply = "I understand your request. Let me help you with that.";
       if (onSend) {
         const result = await onSend(userMessage.content);

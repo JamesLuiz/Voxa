@@ -9,3 +9,4 @@ langchain_community
 requests
 python-dotenv
 mistralai
+redis>=4.6.0

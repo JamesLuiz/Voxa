@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import ChatInterface from "@/components/ChatInterface";
 import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
@@ -176,6 +176,7 @@ const CustomerChat = () => {
                     video
                     style={{ height: "auto", minHeight: 280 }}
                   >
+                    <PublishPendingText />
                     <div className="grid grid-rows-[1fr_auto]">
                       <div className="p-2 sm:p-3">
                         <GridLayout tracks={[]}>
@@ -207,7 +208,7 @@ const CustomerChat = () => {
             </p>
           </div>
           <div className="flex-1">
-            <ChatInterface mode="customer" businessName={businessName} onSend={(text) => customerChat(businessId, text)} />
+            <ChatInterface mode="customer" businessName={businessName} onSend={(text) => customerChat(businessId, text)} onStartVoice={() => handleStartCall()} />
           </div>
         </div>
       </main>
@@ -223,3 +224,33 @@ const CustomerChat = () => {
 };
 
 export default CustomerChat;
+
+function PublishPendingText() {
+  const room = useRoomContext();
+  useEffect(() => {
+    const pending = sessionStorage.getItem('voxa_pending_text');
+    if (!pending) return;
+    const lp: any = (room as any)?.localParticipant;
+    const publishData = async () => {
+      try {
+        const enc = new TextEncoder().encode(pending);
+        // eslint-disable-next-line global-require
+        const { DataPacket_Kind } = require('livekit-client');
+        if (lp && typeof lp.publishData === 'function') {
+          await lp.publishData(enc, DataPacket_Kind.RELIABLE);
+          sessionStorage.removeItem('voxa_pending_text');
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to publish pending text', err);
+      }
+    };
+
+    if (lp && typeof lp.publishData === 'function') {
+      publishData();
+    } else if (room && typeof (room as any).once === 'function') {
+      (room as any).once('connected', publishData);
+    }
+  }, [room]);
+  return null;
+}

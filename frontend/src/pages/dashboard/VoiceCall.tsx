@@ -7,13 +7,13 @@ import { getOwnerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
+  useRoomContext,
   useVoiceAssistant,
   BarVisualizer,
   VoiceAssistantControlBar,
   GridLayout,
   ParticipantTile,
   TrackToggle,
-  useRoomContext,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { Track } from "livekit-client";
@@ -91,6 +91,7 @@ const VoiceCall = () => {
   return (
     <div className="min-h-[calc(100vh-6rem)] p-3 sm:p-4 md:p-6 flex items-center justify-center">
       <LiveKitRoom serverUrl={serverUrl} token={token} connect audio video style={{ height: "auto", width: "100%" }}>
+  <PublishPendingText />
         <div className="w-full max-w-4xl glass rounded-xl sm:rounded-2xl p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0 mb-4 sm:mb-6">
             <div>
@@ -197,4 +198,48 @@ function EndButton({ onEnded }: { onEnded: () => void }) {
       End
     </Button>
   );
+}
+
+function PublishPendingText() {
+  const room = useRoomContext();
+  // publish pending text once when the room/local participant is ready
+  useEffect(() => {
+    let cancelled = false;
+    const tryPublish = async () => {
+      const pending = sessionStorage.getItem('voxa_pending_text');
+      if (!pending) return;
+      try {
+        const lp: any = (room as any)?.localParticipant;
+        const publishData = async () => {
+          try {
+            // publishData expects Uint8Array
+            const enc = new TextEncoder().encode(pending);
+            // DataPacket_Kind is available from livekit-client
+            // eslint-disable-next-line global-require
+            const { DataPacket_Kind } = require('livekit-client');
+            if (lp && typeof lp.publishData === 'function') {
+              await lp.publishData(enc, DataPacket_Kind.RELIABLE);
+              sessionStorage.removeItem('voxa_pending_text');
+            }
+          } catch (err) {
+            // fallback: ignore
+            // eslint-disable-next-line no-console
+            console.warn('Failed to publish pending text', err);
+          }
+        };
+
+        if (lp && typeof lp.publishData === 'function') {
+          await publishData();
+        } else if (room && typeof (room as any).once === 'function') {
+          (room as any).once('connected', publishData);
+        }
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn(e);
+      }
+    };
+    tryPublish();
+    return () => { cancelled = true };
+  }, [room]);
+  return null;
 }
