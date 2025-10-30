@@ -17,18 +17,18 @@ const recentActivity = [
 
 const Overview = () => {
   return (
-    <div className="space-y-8 animate-fade-in">
+    <div className="space-y-6 sm:space-y-8 animate-fade-in px-4 sm:px-0">
       <div>
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+        <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
           Dashboard Overview
         </h1>
-        <p className="text-muted-foreground mt-2">
+        <p className="text-muted-foreground mt-2 text-sm sm:text-base">
           Welcome back! Here's what's happening with your business.
         </p>
       </div>
 
       {/* Stats grid */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
         {statCards.map((stat) => (
           <Card key={stat.title} className="glass border-2 border-transparent bg-gradient-to-br from-primary/10 to-accent/10 hover:from-primary/20 hover:to-accent/20 transition-all">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -38,8 +38,8 @@ const Overview = () => {
               <stat.icon className={`w-5 h-5 ${stat.color}`} />
             </CardHeader>
             <CardContent>
-              <div className="text-3xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{stat.value}</div>
-              <p className="text-sm text-muted-foreground mt-1">
+              <div className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">{stat.value}</div>
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 <span className={stat.change.startsWith("+") ? "text-primary" : "text-destructive"}>
                   {stat.change}
                 </span>{" "}
@@ -53,20 +53,20 @@ const Overview = () => {
       {/* Recent activity */}
       <Card className="glass border-2 border-transparent bg-gradient-to-br from-primary/10 to-accent/10">
         <CardHeader>
-          <CardTitle className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Recent Activity</CardTitle>
+          <CardTitle className="bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent text-lg sm:text-xl">Recent Activity</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
+          <div className="space-y-3 sm:space-y-4">
             {recentActivity.map((activity, index) => (
               <div
                 key={index}
-                className="flex items-center justify-between p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors"
+                className="flex flex-col sm:flex-row sm:items-center justify-between p-3 sm:p-4 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors gap-2 sm:gap-0"
               >
                 <div>
-                  <p className="font-medium">{activity.customer}</p>
-                  <p className="text-sm text-muted-foreground">{activity.action}</p>
+                  <p className="font-medium text-sm sm:text-base">{activity.customer}</p>
+                  <p className="text-xs sm:text-sm text-muted-foreground">{activity.action}</p>
                 </div>
-                <span className="text-sm text-muted-foreground">{activity.time}</span>
+                <span className="text-xs sm:text-sm text-muted-foreground">{activity.time}</span>
               </div>
             ))}
           </div>

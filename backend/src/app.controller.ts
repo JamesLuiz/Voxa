@@ -17,6 +17,14 @@ export class AppController {
     return { token, url: process.env.LIVEKIT_URL };
   }
 
+  @Get('/api/livekit/token')
+  async getLivekitToken(@Query('role') role: string, @Query('businessId') businessId: string) {
+    const participantName = role || 'guest';
+    const roomName = businessId || 'default-room';
+    const token = await this.liveKitService.createToken(roomName, participantName);
+    return { token, serverUrl: process.env.LIVEKIT_URL };
+  }
+
   @Post('/rooms/create')
   async createRoom(
     @Body()

@@ -9,6 +9,7 @@ import { CrmModule } from './crm/crm.module';
 import { TicketsModule } from './tickets/tickets.module';
 import { MeetingsModule } from './meetings/meetings.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     TicketsModule,
     MeetingsModule,
     AnalyticsModule,
+  AiModule,
   ],
   controllers: [AppController],
   providers: [LiveKitService],

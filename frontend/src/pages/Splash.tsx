@@ -1,13 +1,14 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import voxaLogo from "@/assets/voxa-logo.png";
+import { Button } from "@/components/ui/button";
 
 const Splash = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      navigate("/register");
+  navigate("/login");
     }, 3000);
 
     return () => clearTimeout(timer);
@@ -19,7 +20,7 @@ const Splash = () => {
       <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-transparent to-accent/20 animate-pulse-glow" />
       
       {/* Logo container */}
-      <div className="relative z-10 flex flex-col items-center gap-8 animate-fade-in">
+  <div className="relative z-10 flex flex-col items-center gap-8 animate-fade-in">
         <div className="relative">
           <div className="absolute inset-0 blur-3xl bg-primary/30 rounded-full animate-pulse-glow" />
           <img 

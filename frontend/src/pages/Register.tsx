@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import voxaLogo from "@/assets/voxa-logo.png";
 import { registerOwnerBusiness } from "@/lib/api";
+import { toast } from "@/components/ui/sonner";
 
 const Register = () => {
   const navigate = useNavigate();
@@ -40,7 +41,7 @@ const Register = () => {
       // Registration complete -> call backend
       try {
         const result = await registerOwnerBusiness({
-          owner: { name: formData.ownerName, email: formData.ownerEmail },
+          owner: { name: formData.ownerName, email: formData.ownerEmail, password: formData.ownerPassword },
           business: {
             name: formData.businessName,
             industry: formData.businessType,
@@ -51,10 +52,18 @@ const Register = () => {
         });
         localStorage.setItem("voxa_token", result.token || "");
         localStorage.setItem("voxa_business_id", result.businessId || "");
+        toast.success("Registration complete");
         navigate("/dashboard");
-      } catch (e) {
-        // eslint-disable-next-line no-alert
-        alert("Registration failed");
+      } catch (e: unknown) {
+        const msg = (() => {
+          if (typeof e === "string") return e;
+          if (e && typeof e === "object" && "message" in e) {
+            const m = (e as { message?: unknown }).message;
+            return typeof m === "string" ? m : "Registration failed";
+          }
+          return "Registration failed";
+        })();
+        toast.error(msg);
       }
     }
   };

@@ -49,6 +49,25 @@ export class AuthService {
       businessId: created._id.toString(),
     };
   }
+
+  async login(payload: { email: string; password: string }) {
+    const { email, password } = payload;
+    const found = await this.businessModel.findOne({ 'owner.email': email }).lean();
+    if (!found) throw new UnauthorizedException('Invalid credentials');
+
+    const match = await bcrypt.compare(password, found.owner.passwordHash);
+    if (!match) throw new UnauthorizedException('Invalid credentials');
+
+    const token = jwt.sign({ sub: found.owner.email, role: 'owner', businessId: found._id.toString() }, process.env.JWT_SECRET || 'change-me', {
+      expiresIn: '7d',
+    });
+
+    return {
+      token,
+      user: { name: found.owner.name, email: found.owner.email, role: 'owner' },
+      businessId: found._id.toString(),
+    };
+  }
 }
 
 

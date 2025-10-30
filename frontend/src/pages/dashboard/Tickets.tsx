@@ -19,10 +19,15 @@ const Tickets = () => {
   const items = (data?.items || data || []).filter((t: any) => (filter === "All" ? true : t.status === filter));
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-4 sm:space-y-6 animate-fade-in px-4 sm:px-0">
       <div className="flex gap-2 flex-wrap">
         {filters.map((f) => (
-          <Button key={f} variant={filter === f ? "default" : "outline"} onClick={() => setFilter(f)}>
+          <Button 
+            key={f} 
+            variant={filter === f ? "default" : "outline"} 
+            onClick={() => setFilter(f)}
+            className="text-xs sm:text-sm px-3 py-2"
+          >
             {f}
           </Button>
         ))}
@@ -39,17 +44,17 @@ const Tickets = () => {
           {items.map((t: any) => (
             <Card key={t.id} className="glass">
               <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <span>{t.title}</span>
+                <CardTitle className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                  <span className="text-base sm:text-lg break-words">{t.title}</span>
                   <span className="text-xs text-muted-foreground">{t.priority}</span>
                 </CardTitle>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-2">
-                <div>{t.description}</div>
-                <div className="flex items-center gap-2">
+                <div className="break-words">{t.description}</div>
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                   <span>Status:</span>
                   <select
-                    className="bg-transparent border rounded px-2 py-1"
+                    className="bg-transparent border rounded px-2 py-1 w-full sm:w-auto"
                     value={t.status}
                     onChange={(e) => mutation.mutate({ id: t.id, status: e.target.value })}
                   >
@@ -71,5 +76,3 @@ const Tickets = () => {
 };
 
 export default Tickets;
-
-

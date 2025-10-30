@@ -78,24 +78,24 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
   };
 
   return (
-    <div className="flex flex-col h-full glass rounded-2xl overflow-hidden">
+    <div className="flex flex-col h-full glass rounded-xl sm:rounded-2xl overflow-hidden">
       {/* Chat messages */}
-      <ScrollArea className="flex-1 p-6">
-        <div className="space-y-4">
+      <ScrollArea className="flex-1 p-3 sm:p-4 md:p-6">
+        <div className="space-y-3 sm:space-y-4">
           {messages.map((message) => (
             <div
               key={message.id}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}
             >
               <div
-                className={`max-w-[80%] p-4 rounded-2xl ${
+                className={`max-w-[85%] sm:max-w-[80%] p-3 sm:p-4 rounded-xl sm:rounded-2xl ${
                   message.role === "user"
                     ? "bg-gradient-to-r from-primary to-accent text-white"
                     : "bg-muted/50"
                 }`}
               >
-                <p className="text-sm">{message.content}</p>
-                <span className="text-xs opacity-70 mt-2 block">
+                <p className="text-xs sm:text-sm break-words">{message.content}</p>
+                <span className="text-[10px] sm:text-xs opacity-70 mt-1 sm:mt-2 block">
                   {message.timestamp.toLocaleTimeString()}
                 </span>
               </div>
@@ -103,11 +103,11 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
           ))}
           {isTyping && (
             <div className="flex justify-start">
-              <div className="bg-muted/50 p-4 rounded-2xl">
-                <div className="flex gap-2">
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+              <div className="bg-muted/50 p-3 sm:p-4 rounded-xl sm:rounded-2xl">
+                <div className="flex gap-1.5 sm:gap-2">
+                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
                 </div>
               </div>
             </div>
@@ -117,16 +117,16 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
       </ScrollArea>
 
       {/* Input area */}
-      <div className="p-6 border-t border-border">
-        <div className="flex items-center gap-3">
+      <div className="p-3 sm:p-4 md:p-6 border-t border-border">
+        <div className="flex items-center gap-2 sm:gap-3">
           {/* Voice recording button */}
           <Button
             size="icon"
             variant={isRecording ? "default" : "outline"}
             onClick={toggleRecording}
-            className={isRecording ? "animate-pulse-glow" : ""}
+            className={`flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10 ${isRecording ? "animate-pulse-glow" : ""}`}
           >
-            {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            {isRecording ? <MicOff className="w-4 h-4 sm:w-5 sm:h-5" /> : <Mic className="w-4 h-4 sm:w-5 sm:h-5" />}
           </Button>
 
           {/* Text input */}
@@ -136,22 +136,27 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
             onKeyPress={(e) => e.key === "Enter" && handleSend()}
             placeholder={isRecording ? "Recording..." : "Type a message..."}
             disabled={isRecording}
-            className="flex-1"
+            className="flex-1 text-sm sm:text-base"
           />
 
           {/* Send button */}
-          <Button onClick={handleSend} disabled={!input.trim() || isRecording}>
-            <Send className="w-5 h-5" />
+          <Button 
+            onClick={handleSend} 
+            disabled={!input.trim() || isRecording}
+            className="flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10"
+            size="icon"
+          >
+            <Send className="w-4 h-4 sm:w-5 sm:h-5" />
           </Button>
         </div>
 
         {/* Recording waveform */}
         {isRecording && (
-          <div className="flex items-center justify-center gap-1 mt-4 h-12">
+          <div className="flex items-center justify-center gap-0.5 sm:gap-1 mt-3 sm:mt-4 h-8 sm:h-12">
             {[...Array(20)].map((_, i) => (
               <div
                 key={i}
-                className="w-1 bg-primary rounded-full animate-wave"
+                className="w-0.5 sm:w-1 bg-primary rounded-full animate-wave"
                 style={{ 
                   animationDelay: `${i * 50}ms`,
                   height: "100%"
