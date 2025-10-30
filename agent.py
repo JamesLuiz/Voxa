@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 import os
 import logging
 import sys
+import asyncio
 from mistralai import Mistral
 
 from livekit import agents
@@ -259,41 +260,43 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
 # ------------------ ENTRYPOINT ------------------
 async def entrypoint(ctx: agents.JobContext):
     logger.debug(f"Agent joining room: {ctx.room.name}")
-    session = AgentSession()
-    # 1. Attach all message handlers/data handlers BEFORE any prompts or onboarding logic
-    # (code for this part remains, but move up before onboarding below...)
-    async def _handle_incoming_data(payload, participant=None):
-        try:
-            # payload may be bytes or str or already-decoded
-            text = None
-            raw = None
-            if isinstance(payload, (bytes, bytearray)):
-                try:
-                    raw = payload.decode('utf-8')
-                except Exception:
-                    raw = None
-            elif isinstance(payload, str):
-                raw = payload
-            elif hasattr(payload, 'data'):
-                # some SDKs wrap a packet with .data
-                try:
-                    raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
-                except Exception:
-                    raw = None
+    session = None
+    try:
+        session = AgentSession()
+        # 1. Attach all message handlers/data handlers BEFORE any prompts or onboarding logic
+        # (code for this part remains, but move up before onboarding below...)
+        async def _handle_incoming_data(payload, participant=None):
+            try:
+                # payload may be bytes or str or already-decoded
+                text = None
+                raw = None
+                if isinstance(payload, (bytes, bytearray)):
+                    try:
+                        raw = payload.decode('utf-8')
+                    except Exception:
+                        raw = None
+                elif isinstance(payload, str):
+                    raw = payload
+                elif hasattr(payload, 'data'):
+                    # some SDKs wrap a packet with .data
+                    try:
+                        raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
+                    except Exception:
+                        raw = None
 
-            if raw:
-                import json as _json
-                try:
-                    obj = _json.loads(raw)
-                except Exception:
-                    obj = None
+                if raw:
+                    import json as _json
+                    try:
+                        obj = _json.loads(raw)
+                    except Exception:
+                        obj = None
 
-                if obj and obj.get('type') == 'text_message' and obj.get('text'):
-                    text = obj.get('text')
+                    if obj and obj.get('type') == 'text_message' and obj.get('text'):
+                        text = obj.get('text')
 
-            if not text:
-                # nothing for us to do
-                return
+                if not text:
+                    # nothing for us to do
+                    return
 
                 # update room-scoped history
                 try:
@@ -308,70 +311,72 @@ async def entrypoint(ctx: agents.JobContext):
                     await session.generate_reply(instructions=text)
                 except Exception:
                     logger.exception('Failed to generate reply from data message')
+            except Exception:
+                logger.exception('Unhandled error in data message handler')
+        # Attach handler immediately here, so history is filled as soon as user connects (prevents missing customer replies)
+        try:
+            attached = False
+            if hasattr(session, 'on') and callable(getattr(session, 'on')):
+                try: session.on('data', _handle_incoming_data); attached = True
+                except: pass
+                try: session.on('data_received', _handle_incoming_data); attached = attached or True
+                except: pass
+            if not attached and hasattr(session, 'add_data_listener') and callable(getattr(session, 'add_data_listener')):
+                try: session.add_data_listener(_handle_incoming_data); attached = True
+                except: pass
+            if not attached and hasattr(ctx.room, 'on') and callable(getattr(ctx.room, 'on')):
+                try: ctx.room.on('data', _handle_incoming_data); attached = True
+                except: pass
+                try: ctx.room.on('data_received', _handle_incoming_data); attached = attached or True
+                except: pass
+            if not attached:
+                logger.debug('Could not attach data handler to session/room; data messages may be ignored')
         except Exception:
-            logger.exception('Unhandled error in data message handler')
-    # Attach handler immediately here, so history is filled as soon as user connects (prevents missing customer replies)
-    try:
-        attached = False
-        if hasattr(session, 'on') and callable(getattr(session, 'on')):
-            try: session.on('data', _handle_incoming_data); attached = True
-            except: pass
-            try: session.on('data_received', _handle_incoming_data); attached = attached or True
-            except: pass
-        if not attached and hasattr(session, 'add_data_listener') and callable(getattr(session, 'add_data_listener')):
-            try: session.add_data_listener(_handle_incoming_data); attached = True
-            except: pass
-        if not attached and hasattr(ctx.room, 'on') and callable(getattr(ctx.room, 'on')):
-            try: ctx.room.on('data', _handle_incoming_data); attached = True
-            except: pass
-            try: ctx.room.on('data_received', _handle_incoming_data); attached = attached or True
-            except: pass
-        if not attached:
-            logger.debug('Could not attach data handler to session/room; data messages may be ignored')
-    except Exception:
-        logger.exception('Error while trying to attach data handler')
-    # 2. Proceed with rest of agent flow (as before)
-    # ... then fetch metadata & onboarding/collect ...
-    # ... rest of function as before ...
-    # Initial welcome message
-    try:
-        await session.generate_reply(instructions=SESSION_INSTRUCTION)
-    except Exception:
-        # non-fatal: log and continue; don't allow a single failure to stop the worker
-        logger.exception('Failed to generate initial reply')
+            logger.exception('Error while trying to attach data handler')
+        # 2. Proceed with rest of agent flow (as before)
+        # ... then fetch metadata & onboarding/collect ...
+        # ... rest of function as before ...
+        # Initial welcome message
+        try:
+            await session.generate_reply(instructions=SESSION_INSTRUCTION)
+        except Exception:
+            # non-fatal: log and continue; don't allow a single failure to stop the worker
+            logger.exception('Failed to generate initial reply')
 
-    # (call this function, if role==customer)
-    if user_role == 'customer':
-        cust = await collect_customer_info_if_needed(session, ctx, ctx.room.name, business_id)
-        # Optionally: store in session or push confirmation to agent context
-        await session.generate_reply(instructions=f"Thank you {cust.get('name')}, I have your info and can help further!")
+        # (call this function, if role==customer)
+        metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
+        user_role = metadata.get('role', 'customer')
+        business_id = metadata.get('businessId', '')
+        if user_role == 'customer' and business_id:
+            cust = await collect_customer_info_if_needed(session, ctx, ctx.room.name, business_id)
+            # Optionally: store in session or push confirmation to agent context
+            await session.generate_reply(instructions=f"Thank you {cust.get('name')}, I have your info and can help further!")
 
-    # Wait for the job to finish. Some SDKs provide a wait or block until disconnect
-    # If JobContext exposes an awaitable method for lifecycle, use it; otherwise
-    # rely on ctx to manage the lifetime. We simply return from the entrypoint
-    # when ctx.connect() completes or an exception occurs.
-    # Keep the process alive by not raising exceptions beyond this function.
-    
-except Exception as e:
-    # Log but don't re-raise; keep the worker process alive
-    logger.exception(f"Unhandled exception in entrypoint for room {ctx.room.name}: {e}")
-finally:
-    # Ensure session is stopped/closed gracefully but don't kill the process
-    try:
-        if session:
-            # Some session implementations expose stop/close methods
-            if hasattr(session, 'stop') and callable(session.stop):
-                try:
-                    await session.stop()
-                except Exception:
-                    logger.debug('session.stop() failed or not needed')
-            elif hasattr(session, 'close') and callable(session.close):
-                try:
-                    await session.close()
-                except Exception:
-                    logger.debug('session.close() failed or not needed')
-    except Exception:
-        logger.exception('Error during session cleanup')
+        # Wait or perform any additional lifecycle handling here if needed
+    except Exception as e:
+        # Log but don't re-raise; keep the worker process alive
+        try:
+            room_name = getattr(ctx.room, 'name', 'unknown')
+        except Exception:
+            room_name = 'unknown'
+        logger.exception(f"Unhandled exception in entrypoint for room {room_name}: {e}")
+    finally:
+        # Ensure session is stopped/closed gracefully but don't kill the process
+        try:
+            if session:
+                # Some session implementations expose stop/close methods
+                if hasattr(session, 'stop') and callable(getattr(session, 'stop')):
+                    try:
+                        await session.stop()
+                    except Exception:
+                        logger.debug('session.stop() failed or not needed')
+                elif hasattr(session, 'close') and callable(getattr(session, 'close')):
+                    try:
+                        await session.close()
+                    except Exception:
+                        logger.debug('session.close() failed or not needed')
+        except Exception:
+            logger.exception('Error during session cleanup')
 
 
 if __name__ == "__main__":
