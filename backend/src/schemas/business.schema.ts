@@ -42,6 +42,9 @@ export class Business {
   @Prop({ required: true })
   name: string;
 
+  @Prop({ required: true, unique: true, index: true })
+  slug: string;
+
   @Prop({ required: true })
   industry: string;
 

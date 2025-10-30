@@ -4,7 +4,7 @@ import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff, Mic } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { customerChat, getLivekitToken } from "@/lib/api";
+import { customerChat, getLivekitToken, upsertCustomer } from "@/lib/api";
 import { getCustomerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
@@ -18,11 +18,75 @@ import { GridLayout, ParticipantTile, TrackToggle, useRoomContext } from "@livek
 import { Track } from "livekit-client";
 
 const CustomerChat = () => {
-  const { businessId = "" } = useParams();
-  const businessName = "Acme Corp";
+  const { slug = "" } = useParams();
+  const [businessId, setBusinessId] = useState<string>("");
+  const [businessName, setBusinessName] = useState<string>("Acme Corp");
   const [isCallActive, setIsCallActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [livekitInfo, setLivekitInfo] = useState<{ token: string; serverUrl: string } | null>(null);
+  const [customerId, setCustomerId] = useState<string | null>(() => sessionStorage.getItem('customerId'));
+  const [collectStep, setCollectStep] = useState<'none'|'name'|'email'|'phone'|'done'>('none');
+  const [pendingCustomerInfo, setPendingCustomerInfo] = useState<{name?: string; email?: string; phone?: string}>({});
+
+  useEffect(() => {
+    // Resolve business via slug param
+    (async () => {
+      if (!slug) return;
+      try {
+        const res = await fetch(`/api/business/by-slug/${encodeURIComponent(slug)}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.businessId) setBusinessId(data.businessId);
+          if (data?.name) setBusinessName(String(data.name));
+        }
+      } catch {
+        // ignore; UI can show generic state
+      }
+    })();
+    // On mount, if no customerId, start collecting info
+    if (!customerId) setCollectStep('name');
+  }, [customerId, slug]);
+
+  async function handleCustomerIdentityInput(input: string): Promise<string> {
+    // Simulated decision tree for AI/agent: in real deployment you may merge with LLM backend!
+    if (collectStep === 'name') {
+      setPendingCustomerInfo((prev) => ({ ...prev, name: input.trim() }));
+      setCollectStep('email');
+      return "Thank you. Please enter your email address.";
+    } else if (collectStep === 'email') {
+      const valid = /^\S+@\S+\.\S+$/.test(input.trim());
+      if (!valid) return "That does not look like a valid email. Please enter a valid email address.";
+      setPendingCustomerInfo((prev) => ({ ...prev, email: input.trim() }));
+      setCollectStep('phone');
+      return "Great. Now, please enter your phone number.";
+    } else if (collectStep === 'phone') {
+      setPendingCustomerInfo((prev) => ({ ...prev, phone: input.trim() }));
+      setCollectStep('done');
+      // Upsert customer now
+      try {
+        const { _id } = await upsertCustomer({
+          businessId,
+          name: pendingCustomerInfo.name || '',
+          email: pendingCustomerInfo.email || '',
+          phone: input.trim(),
+        });
+        setCustomerId(_id);
+        sessionStorage.setItem('customerId', _id);
+        return "Thank you! A support ticket can now be created or continued.";
+      } catch {
+        setCollectStep('none');
+        return "Sorry, we could not save your info. Please try again later.";
+      }
+    }
+    return "";
+  }
+
+  function getAiPromptForStep() {
+    if (collectStep === 'name') return "Welcome! Please enter your full name to get started.";
+    if (collectStep === 'email') return "Thank you. Please enter your email address.";
+    if (collectStep === 'phone') return "Great. Now, please enter your phone number.";
+    return null;
+  }
 
   const handleStartCall = async () => {
     setIsConnecting(true);
@@ -208,7 +272,14 @@ const CustomerChat = () => {
             </p>
           </div>
           <div className="flex-1">
-            <ChatInterface mode="customer" businessName={businessName} onSend={(text) => customerChat(businessId, text)} onStartVoice={() => handleStartCall()} />
+            <ChatInterface mode="customer" businessName={businessName} onSend={async (text) => {
+              if (!customerId || collectStep !== 'done') {
+                return await handleCustomerIdentityInput(text);
+              }
+              // after customerId is set, proceed to normal chat/ticket
+              const result = await customerChat(businessId, text);
+              return result || "AI did not respond";
+            }} onStartVoice={() => handleStartCall()} />
           </div>
         </div>
       </main>

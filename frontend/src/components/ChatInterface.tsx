@@ -61,18 +61,19 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
       } catch (e) {
         // ignore errors from voice starter
       }
-      let reply = "I understand your request. Let me help you with that.";
       if (onSend) {
         const result = await onSend(userMessage.content);
-        if (typeof result === "string" && result) reply = result;
+        let reply = typeof result === "string" && result ? result : "Error: No response from agent.";
+        const aiMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: reply,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, aiMessage]);
+      } else {
+        // Optionally, handle case when onSend is not provided
       }
-      const aiMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: reply,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
     } finally {
       setIsTyping(false);
     }
@@ -129,14 +130,14 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
       <div className="p-3 sm:p-4 md:p-6 border-t border-border">
         <div className="flex items-center gap-2 sm:gap-3">
           {/* Voice recording button */}
-          <Button
+          {/* <Button
             size="icon"
             variant={isRecording ? "default" : "outline"}
             onClick={toggleRecording}
             className={`flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10 ${isRecording ? "animate-pulse-glow" : ""}`}
           >
             {isRecording ? <MicOff className="w-4 h-4 sm:w-5 sm:h-5" /> : <Mic className="w-4 h-4 sm:w-5 sm:h-5" />}
-          </Button>
+          </Button> */}
 
           {/* Text input */}
           <Input

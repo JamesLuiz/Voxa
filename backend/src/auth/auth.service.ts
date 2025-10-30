@@ -31,8 +31,21 @@ export class AuthService {
 
     const passwordHash = await bcrypt.hash(owner.password, 10);
 
+    // Normalize business name to slug: lowercase, alphanumerics and hyphens
+    const slug = business.name
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    const nameClash = await this.businessModel.findOne({ slug }).lean();
+    if (nameClash) {
+      throw new UnauthorizedException('Business name is already taken');
+    }
+
     const created = await this.businessModel.create({
       ...business,
+      slug,
       owner: { name: owner.name, email: owner.email, passwordHash },
       agentConfig: {},
     });

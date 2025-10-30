@@ -39,7 +39,7 @@ const App = () => (
             <Route path="analytics" element={<Analytics />} />
             <Route path="settings" element={<div className="text-center py-20 text-muted-foreground">Settings coming soon</div>} />
           </Route>
-          <Route path="/chat/:businessId" element={<CustomerChat />} />
+          <Route path="/chat/:slug" element={<CustomerChat />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

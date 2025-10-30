@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Put } from '@nestjs/common';
+import { Body, Controller, Get, Param, Put, Req } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Business, BusinessDocument } from '../schemas/business.schema';
@@ -6,6 +6,38 @@ import { Business, BusinessDocument } from '../schemas/business.schema';
 @Controller('api/business')
 export class BusinessController {
   constructor(@InjectModel(Business.name) private businessModel: Model<BusinessDocument>) {}
+
+  @Get('by-slug/:slug')
+  async getBySlug(@Param('slug') slug: string) {
+    const norm = String(slug).trim().toLowerCase();
+    // Prefer exact slug match; fallback to case-insensitive name for legacy data
+    let biz = await this.businessModel.findOne({ slug: norm }).lean();
+    if (!biz) {
+      biz = await this.businessModel.findOne({ name: { $regex: new RegExp(`^${norm}$`, 'i') } }).lean();
+    }
+    if (!biz) return {};
+    return { businessId: String(biz._id), name: biz.name };
+  }
+
+  @Get('resolve')
+  async resolveBusiness(@Req() req: any) {
+    // Priority: token (future) -> host (future) -> default env -> first business
+    const defaultId = process.env.DEFAULT_BUSINESS_ID;
+    let biz: any = null;
+    if (defaultId) {
+      try {
+        const _id = new Types.ObjectId(defaultId);
+        biz = await this.businessModel.findById(_id).lean();
+      } catch {
+        // ignore
+      }
+    }
+    if (!biz) {
+      biz = await this.businessModel.findOne().lean();
+    }
+    if (!biz) return {};
+    return { businessId: String(biz._id), name: biz.name };
+  }
 
   @Get('context/:businessId')
   async getContext(@Param('businessId') businessId: string) {

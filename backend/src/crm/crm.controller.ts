@@ -22,6 +22,26 @@ export class CrmController {
     return created;
   }
 
+  @Post('upsert')
+  async upsert(@Body() body: {businessId: string, name: string, email: string, phone?: string, company?: string}) {
+    if (!body.businessId || !body.email || !body.name) throw new Error('Missing required businessId, email, or name');
+    const filter: any = { businessId: new Types.ObjectId(body.businessId), email: body.email };
+    let customer = await this.customerModel.findOne(filter);
+    if (!customer) {
+      customer = await this.customerModel.create({
+        businessId: new Types.ObjectId(body.businessId),
+        name: body.name,
+        email: body.email,
+        phone: body.phone,
+        company: body.company,
+        tags: [],
+        conversationHistory: [],
+        lastInteraction: new Date(),
+      });
+    }
+    return customer;
+  }
+
   @Get()
   async list(@Query('businessId') businessId: string) {
     const filter: any = {};

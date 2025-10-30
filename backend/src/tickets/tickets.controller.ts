@@ -9,6 +9,10 @@ export class TicketsController {
 
   @Post()
   async create(@Body() body: any) {
+    // Validation: require business and customer linkage
+    if (!body.businessId || !body.customerId) {
+      throw new Error('Missing required: businessId and customerId');
+    }
     const created = await this.ticketModel.create({
       businessId: new Types.ObjectId(body.businessId),
       customerId: new Types.ObjectId(body.customerId),

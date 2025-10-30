@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import voxaLogo from "@/assets/voxa-logo.png";
-import { Button } from "@/components/ui/button";
+
 
 const Splash = () => {
   const navigate = useNavigate();

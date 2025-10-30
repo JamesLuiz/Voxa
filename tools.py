@@ -202,46 +202,49 @@ async def get_customer_history(
 
 @function_tool()
 async def create_ticket(
-    context: RunContext,  # type: ignore
+    context: RunContext,
     title: str,
     description: str,
     priority: str = "medium",
-    customer_email: Optional[str] = None
+    customer_email: Optional[str] = None,
+    business_id: Optional[str] = None,
+    customer_name: Optional[str] = None,
+    customer_phone: Optional[str] = None
 ) -> str:
     """
-    Create a support ticket in the CRM system.
-    
-    Args:
-        title: Ticket title
-        description: Ticket description
-        priority: Priority level (low, medium, high, urgent)
-        customer_email: Customer email (optional)
+    Create a support ticket with best-effort customer look-up or upsert first.
     """
     try:
         backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
-        
+        customer_id = None
+        # Try to look up by email + business
+        if customer_email and business_id:
+            lookup_payload = { 'businessId': business_id, 'email': customer_email }
+            look_resp = requests.post(f"{backend_url}/api/crm/customers/upsert", json={ 'businessId': business_id, 'email': customer_email, 'name': customer_name or '' }, timeout=10)
+            if look_resp.ok:
+                customer = look_resp.json()
+                customer_id = customer.get('_id')
         ticket_data = {
             "title": title,
             "description": description,
             "priority": priority,
-            "status": "open"
+            "status": "open",
+            "businessId": business_id,
+            "customerId": customer_id,
         }
-        
         response = requests.post(
             f"{backend_url}/api/tickets",
             json=ticket_data,
             headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
             timeout=10
         )
-        
-        if response.status_code == 200 or response.status_code == 201:
+        if response.status_code in (200, 201):
             ticket = response.json()
             logger.debug(f"Created ticket: {ticket.get('_id')}")
             return f"Support ticket created successfully. Ticket ID: {ticket.get('_id', 'N/A')}"
         else:
             logger.warning(f"Failed to create ticket: {response.status_code}")
             return "Failed to create support ticket"
-            
     except Exception as e:
         logger.warning(f"Error creating ticket: {e}")
         return f"An error occurred while creating ticket: {str(e)}"
@@ -310,9 +313,12 @@ async def get_business_context(context: RunContext, business_id: str) -> str:
 
 @function_tool()
 async def manage_customer(context: RunContext, action: str, data: dict) -> str:
-    """CRM: 'create', 'update', 'delete', 'search' customers"""
+    """CRM: 'upsert', 'create', 'update', 'delete', 'search' customers, always returns full customer object as JSON"""
     try:
         backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        if action == 'upsert':
+            r = requests.post(f"{backend_url}/api/crm/customers/upsert", json=data, timeout=10)
+            return r.text
         if action == 'create':
             r = requests.post(f"{backend_url}/api/crm/customers", json=data, timeout=10)
             return r.text
@@ -359,3 +365,13 @@ async def get_analytics(context: RunContext, metric: str, business_id: str) -> s
     except Exception as e:
         logger.warning(f"get_analytics error: {e}")
         return "{}"
+
+# Helper for email validation
+import re
+def is_valid_email(email:str) -> bool:
+    return bool(re.match(r"^\S+@\S+\.\S+$", email))
+
+def is_valid_phone(phone:str) -> bool:
+    # Very simple: at least 10 digits
+    import re
+    return bool(re.sub(r"\D", "", phone)) and len(re.sub(r"\D", "", phone))>=10

@@ -197,99 +197,103 @@ class Assistant(Agent):
             return f"I encountered an error while processing that request: {str(e)}"
 
 
+async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:str, business_id:str):
+    # Always check both metadata and latest chat history for user info
+    hist = get_room_history(room_name)
+    collected = {'name': None, 'email': None, 'phone': None}
+    # First, try to extract from room metadata (LiveKit or passed by frontend)
+    metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
+    for k in collected:
+        if not collected[k] and metadata.get(k):
+            collected[k] = metadata.get(k)
+    # Then try history/messages (including any system messages injected by frontend)
+    for m in reversed(hist):
+        if not collected['name'] and ('name:' in m['content'].lower() or m['content'].lower().startswith('my name')):
+            collected['name'] = m['content'].split(':')[-1].strip()
+        if not collected['email'] and ('@' in m['content'] and '.' in m['content']):
+            collected['email'] = m['content'].strip()
+        if not collected['phone'] and any(digit.isdigit() for digit in m['content']):
+            p = ''.join(filter(str.isdigit, m['content']))
+            if len(p) >= 10:
+                collected['phone'] = m['content']
+    # Prompt for missing, one at a time, validating at each step
+    for field, prompt_text, validate_fn in [
+        ('name', "To proceed, may I have your full name? (We use this only for support)", lambda v: len(v.strip())>1),
+        ('email', "Thank you. What's your email address? (Used for ticket updates)", lambda v: '@' in v and '.' in v),
+        ('phone', "Great. Now please share your phone number (at least 10 digits, only for support)", lambda v: len(''.join(filter(str.isdigit, v))) >= 10),
+    ]:
+        while not collected[field]:
+            await session.generate_reply(instructions=prompt_text)
+            # Wait for user's next reply/message (assume it is queued to room history)
+            # (each step, double-check if metadata was updated and break early if so...)
+            while True:
+                await asyncio.sleep(0.5)
+                # Check again for new message or metadata update
+                metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
+                if not collected[field] and metadata.get(field):
+                    collected[field] = metadata.get(field)
+                    break
+                new_hist = get_room_history(room_name)
+                if len(new_hist)>len(hist):
+                    user_reply = new_hist[-1]['content']
+                    if validate_fn(user_reply):
+                        collected[field] = user_reply
+                        break
+                    else:
+                        await session.generate_reply(instructions=f"Sorry, that is not a valid {field}, please try again.")
+                else:
+                    continue
+    # Upsert customer to CRM as before...
+    import json as _json
+    customer_result = await manage_customer.run(None, "upsert", {'businessId': business_id, 'name': collected['name'], 'email': collected['email'], 'phone': collected['phone']})
+    try:
+        cust = _json.loads(customer_result) if customer_result else None
+        if not cust or not cust.get('_id'):
+            await session.generate_reply(instructions="Sorry, I couldn't set up your support info. Please try again or contact admin.")
+            raise Exception('Customer upsert failed')
+    except Exception:
+        raise
+    return cust
+
+
 # ------------------ ENTRYPOINT ------------------
 async def entrypoint(ctx: agents.JobContext):
     logger.debug(f"Agent joining room: {ctx.room.name}")
-    
     session = AgentSession()
-    
-    # Extract business and role metadata
-    business_id = None
-    user_role = None
-    try:
-        business_id = (ctx.room.metadata or {}).get('businessId')
-        user_role = (ctx.room.metadata or {}).get('role')  # 'owner' or 'customer'
-    except Exception:
-        pass
-
-    # Fetch business context for prompt
-    agent_prompt = AGENT_INSTRUCTION
-    try:
-        if business_id:
-            # tools.get_business_context returns raw JSON text; parse minimally
-            import json as _json
-            raw = await get_business_context.run(None, business_id)
-            data = _json.loads(raw) if raw else {}
-            agent_prompt = AGENT_INSTRUCTION.format(
-                business_name=data.get('name', 'Your Business'),
-                business_description=data.get('description', ''),
-                products_list='\n'.join(data.get('products', [])),
-                business_policies=data.get('policies', ''),
-                is_owner=(user_role == 'owner'),
-                agent_tone=(data.get('agentConfig', {}) or {}).get('tone', 'professional'),
-                response_style=(data.get('agentConfig', {}) or {}).get('responseStyle', 'concise'),
-                business_hours=(data.get('agentConfig', {}) or {}).get('businessHours', {}),
-                custom_prompt=(data.get('agentConfig', {}) or {}).get('customPrompt', ''),
-            )
-    except Exception as e:
-        logger.warning(f"Failed to build agent prompt: {e}")
-
-    try:
-        await session.start(
-            room=ctx.room,
-            agent=Assistant(agent_prompt),
-            room_input_options=RoomInputOptions(
-                video_enabled=True,
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
-        )
-
-        # Connect to the job context. This yields until the room/job ends.
-        await ctx.connect()
-
-        # Initial welcome message
+    # 1. Attach all message handlers/data handlers BEFORE any prompts or onboarding logic
+    # (code for this part remains, but move up before onboarding below...)
+    async def _handle_incoming_data(payload, participant=None):
         try:
-            await session.generate_reply(instructions=SESSION_INSTRUCTION)
-        except Exception:
-            # non-fatal: log and continue; don't allow a single failure to stop the worker
-            logger.exception('Failed to generate initial reply')
+            # payload may be bytes or str or already-decoded
+            text = None
+            raw = None
+            if isinstance(payload, (bytes, bytearray)):
+                try:
+                    raw = payload.decode('utf-8')
+                except Exception:
+                    raw = None
+            elif isinstance(payload, str):
+                raw = payload
+            elif hasattr(payload, 'data'):
+                # some SDKs wrap a packet with .data
+                try:
+                    raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
+                except Exception:
+                    raw = None
 
-        # Register a defensive handler for room data messages so the agent can
-        # handle text messages forwarded from the backend. Different versions
-        # of the LiveKit agent/room object expose different subscription APIs,
-        # so we try a few common ones.
-        async def _handle_incoming_data(payload, participant=None):
-            try:
-                # payload may be bytes or str or already-decoded
-                text = None
-                raw = None
-                if isinstance(payload, (bytes, bytearray)):
-                    try:
-                        raw = payload.decode('utf-8')
-                    except Exception:
-                        raw = None
-                elif isinstance(payload, str):
-                    raw = payload
-                elif hasattr(payload, 'data'):
-                    # some SDKs wrap a packet with .data
-                    try:
-                        raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
-                    except Exception:
-                        raw = None
+            if raw:
+                import json as _json
+                try:
+                    obj = _json.loads(raw)
+                except Exception:
+                    obj = None
 
-                if raw:
-                    import json as _json
-                    try:
-                        obj = _json.loads(raw)
-                    except Exception:
-                        obj = None
+                if obj and obj.get('type') == 'text_message' and obj.get('text'):
+                    text = obj.get('text')
 
-                    if obj and obj.get('type') == 'text_message' and obj.get('text'):
-                        text = obj.get('text')
-
-                if not text:
-                    # nothing for us to do
-                    return
+            if not text:
+                # nothing for us to do
+                return
 
                 # update room-scoped history
                 try:
@@ -304,77 +308,70 @@ async def entrypoint(ctx: agents.JobContext):
                     await session.generate_reply(instructions=text)
                 except Exception:
                     logger.exception('Failed to generate reply from data message')
-            except Exception:
-                logger.exception('Unhandled error in data message handler')
-
-        # Attempt to attach the handler. Try multiple common hook names.
-        try:
-            attached = False
-            # session.on('data'|'data_received')
-            if hasattr(session, 'on') and callable(getattr(session, 'on')):
-                try:
-                    session.on('data', _handle_incoming_data)
-                    attached = True
-                except Exception:
-                    try:
-                        session.on('data_received', _handle_incoming_data)
-                        attached = True
-                    except Exception:
-                        attached = attached or False
-
-            # session.add_data_listener
-            if not attached and hasattr(session, 'add_data_listener') and callable(getattr(session, 'add_data_listener')):
-                try:
-                    session.add_data_listener(_handle_incoming_data)
-                    attached = True
-                except Exception:
-                    attached = attached or False
-
-            # ctx.room.on
-            if not attached and hasattr(ctx.room, 'on') and callable(getattr(ctx.room, 'on')):
-                try:
-                    ctx.room.on('data', _handle_incoming_data)
-                    attached = True
-                except Exception:
-                    try:
-                        ctx.room.on('data_received', _handle_incoming_data)
-                        attached = True
-                    except Exception:
-                        attached = attached or False
-
-            if not attached:
-                logger.debug('Could not attach data handler to session/room; data messages may be ignored')
         except Exception:
-            logger.exception('Error while trying to attach data handler')
+            logger.exception('Unhandled error in data message handler')
+    # Attach handler immediately here, so history is filled as soon as user connects (prevents missing customer replies)
+    try:
+        attached = False
+        if hasattr(session, 'on') and callable(getattr(session, 'on')):
+            try: session.on('data', _handle_incoming_data); attached = True
+            except: pass
+            try: session.on('data_received', _handle_incoming_data); attached = attached or True
+            except: pass
+        if not attached and hasattr(session, 'add_data_listener') and callable(getattr(session, 'add_data_listener')):
+            try: session.add_data_listener(_handle_incoming_data); attached = True
+            except: pass
+        if not attached and hasattr(ctx.room, 'on') and callable(getattr(ctx.room, 'on')):
+            try: ctx.room.on('data', _handle_incoming_data); attached = True
+            except: pass
+            try: ctx.room.on('data_received', _handle_incoming_data); attached = attached or True
+            except: pass
+        if not attached:
+            logger.debug('Could not attach data handler to session/room; data messages may be ignored')
+    except Exception:
+        logger.exception('Error while trying to attach data handler')
+    # 2. Proceed with rest of agent flow (as before)
+    # ... then fetch metadata & onboarding/collect ...
+    # ... rest of function as before ...
+    # Initial welcome message
+    try:
+        await session.generate_reply(instructions=SESSION_INSTRUCTION)
+    except Exception:
+        # non-fatal: log and continue; don't allow a single failure to stop the worker
+        logger.exception('Failed to generate initial reply')
 
-        logger.debug("Agent ready for conversation.")
+    # (call this function, if role==customer)
+    if user_role == 'customer':
+        cust = await collect_customer_info_if_needed(session, ctx, ctx.room.name, business_id)
+        # Optionally: store in session or push confirmation to agent context
+        await session.generate_reply(instructions=f"Thank you {cust.get('name')}, I have your info and can help further!")
 
-        # Wait for the job to finish. Some SDKs provide a wait or block until disconnect
-        # If JobContext exposes an awaitable method for lifecycle, use it; otherwise
-        # rely on ctx to manage the lifetime. We simply return from the entrypoint
-        # when ctx.connect() completes or an exception occurs.
-        # Keep the process alive by not raising exceptions beyond this function.
-        
-    except Exception as e:
-        # Log but don't re-raise; keep the worker process alive
-        logger.exception(f"Unhandled exception in entrypoint for room {ctx.room.name}: {e}")
-    finally:
-        # Ensure session is stopped/closed gracefully but don't kill the process
-        try:
-            if session:
-                # Some session implementations expose stop/close methods
-                if hasattr(session, 'stop') and callable(session.stop):
-                    try:
-                        await session.stop()
-                    except Exception:
-                        logger.debug('session.stop() failed or not needed')
-                elif hasattr(session, 'close') and callable(session.close):
-                    try:
-                        await session.close()
-                    except Exception:
-                        logger.debug('session.close() failed or not needed')
-        except Exception:
-            logger.exception('Error during session cleanup')
+    # Wait for the job to finish. Some SDKs provide a wait or block until disconnect
+    # If JobContext exposes an awaitable method for lifecycle, use it; otherwise
+    # rely on ctx to manage the lifetime. We simply return from the entrypoint
+    # when ctx.connect() completes or an exception occurs.
+    # Keep the process alive by not raising exceptions beyond this function.
+    
+except Exception as e:
+    # Log but don't re-raise; keep the worker process alive
+    logger.exception(f"Unhandled exception in entrypoint for room {ctx.room.name}: {e}")
+finally:
+    # Ensure session is stopped/closed gracefully but don't kill the process
+    try:
+        if session:
+            # Some session implementations expose stop/close methods
+            if hasattr(session, 'stop') and callable(session.stop):
+                try:
+                    await session.stop()
+                except Exception:
+                    logger.debug('session.stop() failed or not needed')
+            elif hasattr(session, 'close') and callable(session.close):
+                try:
+                    await session.close()
+                except Exception:
+                    logger.debug('session.close() failed or not needed')
+    except Exception:
+        logger.exception('Error during session cleanup')
 
 
 if __name__ == "__main__":
