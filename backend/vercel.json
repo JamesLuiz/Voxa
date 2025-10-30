@@ -1,12 +1,18 @@
 {
   "version": 2,
-  "installCommand": "npm ci",
   "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "functions": {
-    "api/index.ts": { "runtime": "@vercel/node" }
+    "api/index.ts": { "runtime": "@vercel/node@2.9.1" }
   },
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/api/index.ts" },
-    { "src": "/(.*)", "dest": "/api/index.ts" }
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index.ts"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
   ]
 }
