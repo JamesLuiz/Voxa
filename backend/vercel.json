@@ -3,7 +3,7 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "functions": {
-    "api/index.ts": { "runtime": "@vercel/node@18.0.0" }
+    "api/index.ts": { "runtime": "@vercel/node" }
   },
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/index.ts" },
