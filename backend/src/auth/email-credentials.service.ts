@@ -46,7 +46,6 @@ export class EmailCredentialsService {
       const isGmail = email.endsWith('@gmail.com') || smtpServer.includes('gmail');
       
       const transportConfig: any = {
-        host: smtpServer,
         port: Number(smtpPort),
         secure: Number(smtpPort) === 465, // true for 465, false for other ports
         auth: {
@@ -65,19 +64,49 @@ export class EmailCredentialsService {
         })
       };
 
-      // For Gmail, we need to specify special options
+      // For Gmail, prefer using the named service so nodemailer applies provider defaults.
+      // Avoid setting host when using `service: 'gmail'` to prevent conflicts.
       if (isGmail) {
         transportConfig.service = 'gmail';
+      } else {
+        transportConfig.host = smtpServer;
       }
 
+      // Create transporter and log non-sensitive transport properties to help debug
       const transporter = nodemailer.createTransport(transportConfig);
+      const maskedConfig = {
+        host: transportConfig.host,
+        port: transportConfig.port,
+        secure: transportConfig.secure,
+        service: transportConfig.service,
+        authUser: transportConfig.auth?.user,
+      };
+      console.info('SMTP verify - transport config (masked):', maskedConfig);
 
       // nodemailer verify will attempt to connect and authenticate
       await transporter.verify();
       return { ok: true };
     } catch (err: unknown) {
-      console.error('SMTP Verification Error:', err);
-      const msg = err && typeof err === 'object' && 'message' in err ? (err as any).message : String(err);
+      // Log detailed error info (avoid logging secrets)
+      const anyErr = err as any;
+      console.error('SMTP Verification Error:', {
+        message: anyErr?.message,
+        code: anyErr?.code,
+        response: anyErr?.response,
+        responseCode: anyErr?.responseCode,
+        command: anyErr?.command,
+        stack: anyErr instanceof Error ? anyErr.stack : undefined,
+      });
+
+      // Parse common authentication error cases and return helpful hints
+      let msg = (anyErr && typeof anyErr === 'object' && 'message' in anyErr) ? String(anyErr.message) : String(err);
+      // Nodemailer/SMTP common auth error codes: EAUTH, 535, 5.7.8
+      if (anyErr?.code === 'EAUTH' || /535|5\.7\.8|Authentication failed|Invalid credentials/i.test(String(anyErr?.response || anyErr?.message))) {
+        msg = 'Authentication failed: invalid credentials or blocked login. For Gmail accounts use an App Password when 2FA is enabled, or configure OAuth2. Also check for provider "less secure app"/security alerts.';
+      } else if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(msg)) {
+        msg = 'Connection failed to SMTP server. Check host, port and network connectivity.';
+      }
+
       return { ok: false, message: msg };
     }
   }
