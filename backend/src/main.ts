@@ -2,9 +2,6 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-// Python agent is run independently; do not spawn it from NestJS.
-
-// The Python agent is intentionally not started by NestJS. Run it independently.
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
