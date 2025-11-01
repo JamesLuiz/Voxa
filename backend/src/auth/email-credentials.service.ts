@@ -42,7 +42,10 @@ export class EmailCredentialsService {
 
   async verifySmtp(email: string, password: string, smtpServer = 'smtp.gmail.com', smtpPort = 587): Promise<{ ok: boolean; message?: string }> {
     try {
-      const transporter = nodemailer.createTransport({
+      // Special handling for Gmail which may require app password
+      const isGmail = email.endsWith('@gmail.com') || smtpServer.includes('gmail');
+      
+      const transportConfig: any = {
         host: smtpServer,
         port: Number(smtpPort),
         secure: Number(smtpPort) === 465, // true for 465, false for other ports
@@ -50,12 +53,30 @@ export class EmailCredentialsService {
           user: email,
           pass: password,
         },
-      });
+        // Add debug option to help troubleshoot connection issues
+        debug: process.env.NODE_ENV !== 'production',
+        // Increase timeout for slow connections
+        connectionTimeout: 10000, // 10 seconds
+        // Disable TLS verification in development for testing
+        ...(process.env.NODE_ENV !== 'production' && {
+          tls: {
+            rejectUnauthorized: false
+          }
+        })
+      };
+
+      // For Gmail, we need to specify special options
+      if (isGmail) {
+        transportConfig.service = 'gmail';
+      }
+
+      const transporter = nodemailer.createTransport(transportConfig);
 
       // nodemailer verify will attempt to connect and authenticate
       await transporter.verify();
       return { ok: true };
     } catch (err: unknown) {
+      console.error('SMTP Verification Error:', err);
       const msg = err && typeof err === 'object' && 'message' in err ? (err as any).message : String(err);
       return { ok: false, message: msg };
     }

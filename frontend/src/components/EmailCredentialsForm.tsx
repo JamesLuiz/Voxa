@@ -78,7 +78,7 @@ const EmailCredentialsForm: React.FC<EmailCredentialsFormProps> = ({ businessId 
       // POST endpoint does verify before saving; call it but do not persist on success.
       // We'll call a verification-only route if available; otherwise call POST and rely on response. To avoid saving on success, backend would need a flag — but current backend verifies then saves.
       // Workaround: call a dedicated verify-only endpoint if present, otherwise call POST then immediately inform user. Here we call POST and trust that server returns verified status.
-      const response = await fetch('/api/email-credentials', {
+      const response = await fetch(`${API_BASE}/api/email-credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ businessId, email, password, smtpServer, smtpPort: Number(smtpPort || 587) }),
