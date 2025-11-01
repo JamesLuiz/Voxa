@@ -15,4 +15,10 @@ export default defineConfig(({ mode }) => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    outDir: "dist",
+    sourcemap: true,
+    // Ensure all directories are included in the build
+    copyPublicDir: true,
+  },
 }));
