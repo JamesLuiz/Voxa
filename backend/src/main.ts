@@ -1,9 +1,8 @@
+// Ensure environment variables are loaded before importing application modules.
+import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import * as dotenv from 'dotenv';
 // Python agent is run independently; do not spawn it from NestJS.
-
-dotenv.config();
 
 // The Python agent is intentionally not started by NestJS. Run it independently.
 
