@@ -62,8 +62,8 @@ export class AppController {
     };
   }
 
-  @Get('/health')
+  @Get('/')
   health() {
-    return { status: 'ok', timestamp: new Date().toISOString() };
+  return { status: 'ok', message: 'Voxa backend is running', timestamp: new Date().toISOString() };
   }
 }
