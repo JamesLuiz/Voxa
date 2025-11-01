@@ -3,9 +3,6 @@ from livekit.agents import function_tool, RunContext
 import requests
 from langchain_community.tools import DuckDuckGoSearchRun
 import os
-import smtplib
-from email.mime.multipart import MIMEMultipart  
-from email.mime.text import MIMEText
 from typing import Optional
 
 # Configure logger for this module
@@ -56,92 +53,82 @@ async def send_email(
     cc_email: Optional[str] = None
 ) -> str:
     """
-    Send an email using the business's stored email credentials.
-    
-    Args:
-        to_email: Recipient email address
-        subject: Email subject line
-        message: Email body content
-        business_id: ID of the business whose credentials to use
-        cc_email: Optional CC email address
+    Send an email using SendGrid. Prefer the business-stored SendGrid API key (via /full),
+    otherwise fall back to the server-wide SEND_GRID environment variable.
     """
     try:
-        # Get backend URL from environment or use default
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
-        
-        # Fetch email credentials from the backend
+
+        # Try to fetch business metadata first
         response = requests.get(
             f"{backend_url}/api/email-credentials/{business_id}",
             headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
             timeout=10
         )
-        
+
         if response.status_code != 200:
             logger.warning(f"Failed to fetch email credentials for business {business_id}")
             return "Email sending failed: Could not retrieve email credentials."
-        
+
         credentials = response.json()
-        
-        # SMTP configuration
-        smtp_server = credentials.get('smtpServer', 'smtp.gmail.com')
-        smtp_port = credentials.get('smtpPort', 587)
-        gmail_user = credentials.get('email')
-        
-    # Request the full credentials (this endpoint returns the decrypted password when the request
-    # is authorized with the BACKEND_API_KEY).
-        password_response = requests.get(
-            f"{backend_url}/api/email-credentials/{business_id}/full",
-            headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
-            timeout=10
-        )
-        
-        if password_response.status_code != 200:
-            logger.warning(f"Failed to fetch email password for business {business_id}")
-            return "Email sending failed: Could not retrieve email password."
-        
-        full_credentials = password_response.json()
-        gmail_password = full_credentials.get('password')
-        
-        if not gmail_user or not gmail_password:
-            logger.warning("Email credentials incomplete")
-            return "Email sending failed: Email credentials not properly configured."
-        
-        # Create message
-        msg = MIMEMultipart()
-        msg['From'] = gmail_user
-        msg['To'] = to_email
-        msg['Subject'] = subject
-        
-        # Add CC if provided
-        recipients = [to_email]
+        from_email = credentials.get('email') or os.getenv('DEFAULT_FROM_EMAIL')
+
+        # Attempt to get decrypted business API key via the protected endpoint
+        api_key = None
+        try:
+            full_resp = requests.get(
+                f"{backend_url}/api/email-credentials/{business_id}/full",
+                headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
+                timeout=10
+            )
+            if full_resp.status_code == 200:
+                full_json = full_resp.json()
+                # service stores sendgridApiKey as encrypted key previously; backend returns it as sendgridApiKey or apiKey
+                api_key = full_json.get('sendgridApiKey') or full_json.get('apiKey') or full_json.get('password')
+        except Exception:
+            api_key = None
+
+        # Fallback to server-wide SEND_GRID
+        if not api_key:
+            api_key = os.getenv('SEND_GRID')
+
+        if not api_key:
+            logger.warning('No SendGrid API key available for sending')
+            return 'Email sending failed: No SendGrid API key available.'
+
+        if not from_email:
+            logger.warning('No from email configured')
+            return 'Email sending failed: No from email configured.'
+
+        # Build SendGrid payload
+        payload = {
+            "personalizations": [
+                {
+                    "to": [{ "email": to_email }],
+                    "subject": subject,
+                }
+            ],
+            "from": { "email": from_email },
+            "content": [{ "type": "text/plain", "value": message }]
+        }
         if cc_email:
-            msg['Cc'] = cc_email
-            recipients.append(cc_email)
-        
-        # Attach message body
-        msg.attach(MIMEText(message, 'plain'))
-        
-        # Connect to SMTP server
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()  # Enable TLS encryption
-        server.login(gmail_user, gmail_password)
-        
-        # Send email
-        text = msg.as_string()
-        server.sendmail(gmail_user, recipients, text)
-        server.quit()
-        
-        logger.debug(f"Email sent successfully to {to_email}")
-        return f"Email sent successfully to {to_email}"
-        
-    except smtplib.SMTPAuthenticationError:
-        logger.warning("Email authentication failed")
-        return "Email sending failed: Authentication error. Please check your email credentials."
-    except smtplib.SMTPException as e:
-        logger.warning(f"SMTP error occurred: {e}")
-        return f"Email sending failed: SMTP error - {str(e)}"
+            payload["personalizations"][0]["cc"] = [{ "email": cc_email }]
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        send_resp = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers, timeout=10)
+        if send_resp.status_code in (200, 202):
+            logger.debug(f"Email sent successfully to {to_email}")
+            return f"Email sent successfully to {to_email}"
+        else:
+            logger.warning(f"SendGrid send failed: {send_resp.status_code} {send_resp.text}")
+            return f"Email sending failed: SendGrid error {send_resp.status_code} - {send_resp.text}"
+
     except Exception as e:
-        logger.warning(f"Error sending email: {e}")
+        logger.warning(f"Error sending email via SendGrid: {e}")
         return f"An error occurred while sending email: {str(e)}"
 
 @function_tool()

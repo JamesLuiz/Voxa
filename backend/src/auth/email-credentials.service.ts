@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { EmailCredentials, EmailCredentialsDocument } from '../schemas/email-credentials.schema';
 import { encryptText, decryptText } from '../utils/crypto.util';
-import nodemailer from 'nodemailer';
+import sgMail from '@sendgrid/mail';
 
 @Injectable()
 export class EmailCredentialsService {
@@ -12,102 +12,56 @@ export class EmailCredentialsService {
     private emailCredentialsModel: Model<EmailCredentialsDocument>,
   ) {}
 
-  async saveCredentials(businessId: string, email: string, password: string): Promise<EmailCredentials> {
-    // Encrypt the password for storage (we need the plaintext later to send emails)
+
+  async saveCredentials(businessId: string, email: string, apiKey: string): Promise<EmailCredentials> {
     const key = process.env.EMAIL_ENCRYPTION_KEY || '';
     if (!key) {
       throw new Error('EMAIL_ENCRYPTION_KEY is not set on the server');
     }
-    const encryptedPassword = encryptText(password, key);
 
-    // Check if credentials already exist for this business
+    const encryptedApiKey = encryptText(apiKey, key);
+
     const existingCredentials = await this.emailCredentialsModel.findOne({ businessId }).exec();
-    
     if (existingCredentials) {
-      // Update existing credentials
       existingCredentials.email = email;
-      existingCredentials.encryptedPassword = encryptedPassword;
+      existingCredentials.sendgridApiKey = encryptedApiKey;
+      // Clear legacy password fields to avoid confusion
+      existingCredentials.encryptedPassword = undefined;
       existingCredentials.passwordHash = undefined;
       return existingCredentials.save();
-    } else {
-      // Create new credentials
-      const newCredentials = new this.emailCredentialsModel({
-        businessId,
-        email,
-        encryptedPassword,
-      });
-      return newCredentials.save();
     }
+
+    const newCredentials = new this.emailCredentialsModel({ businessId, email, sendgridApiKey: encryptedApiKey });
+    return newCredentials.save();
   }
 
-  async verifySmtp(email: string, password: string, smtpServer = 'smtp.gmail.com', smtpPort = 587): Promise<{ ok: boolean; message?: string }> {
+  async verifySendGrid(email: string, apiKey: string): Promise<{ ok: boolean; message?: string }> {
     try {
-      // Special handling for Gmail which may require app password
-      const isGmail = email.endsWith('@gmail.com') || smtpServer.includes('gmail');
-      
-      const transportConfig: any = {
-        port: Number(smtpPort),
-        secure: Number(smtpPort) === 465, // true for 465, false for other ports
-        auth: {
-          user: email,
-          pass: password,
-        },
-        // Add debug option to help troubleshoot connection issues
-        debug: process.env.NODE_ENV !== 'production',
-        // Increase timeout for slow connections
-        connectionTimeout: 10000, // 10 seconds
-        // Disable TLS verification in development for testing
-        ...(process.env.NODE_ENV !== 'production' && {
-          tls: {
-            rejectUnauthorized: false
-          }
-        })
-      };
+      sgMail.setApiKey(apiKey);
 
-      // For Gmail, prefer using the named service so nodemailer applies provider defaults.
-      // Avoid setting host when using `service: 'gmail'` to prevent conflicts.
-      if (isGmail) {
-        transportConfig.service = 'gmail';
-      } else {
-        transportConfig.host = smtpServer;
-      }
-
-      // Create transporter and log non-sensitive transport properties to help debug
-      const transporter = nodemailer.createTransport(transportConfig);
-      const maskedConfig = {
-        host: transportConfig.host,
-        port: transportConfig.port,
-        secure: transportConfig.secure,
-        service: transportConfig.service,
-        authUser: transportConfig.auth?.user,
-      };
-      console.info('SMTP verify - transport config (masked):', maskedConfig);
-
-      // nodemailer verify will attempt to connect and authenticate
-      await transporter.verify();
-      return { ok: true };
-    } catch (err: unknown) {
-      // Log detailed error info (avoid logging secrets)
-      const anyErr = err as any;
-      console.error('SMTP Verification Error:', {
-        message: anyErr?.message,
-        code: anyErr?.code,
-        response: anyErr?.response,
-        responseCode: anyErr?.responseCode,
-        command: anyErr?.command,
-        stack: anyErr instanceof Error ? anyErr.stack : undefined,
+      // Send test email to verify key. Note SendGrid may require sender verification for the 'from' address.
+      await sgMail.send({
+        to: email,
+        from: email,
+        subject: 'SendGrid Verification Test',
+        text: 'If you receive this, your SendGrid API key is working!',
+        html: '<p>If you receive this, your SendGrid API key is <strong>working!</strong></p>',
       });
 
-      // Parse common authentication error cases and return helpful hints
-      let msg = (anyErr && typeof anyErr === 'object' && 'message' in anyErr) ? String(anyErr.message) : String(err);
-      // Nodemailer/SMTP common auth error codes: EAUTH, 535, 5.7.8
-      if (anyErr?.code === 'EAUTH' || /535|5\.7\.8|Authentication failed|Invalid credentials/i.test(String(anyErr?.response || anyErr?.message))) {
-        msg = 'Authentication failed: invalid credentials or blocked login. For Gmail accounts use an App Password when 2FA is enabled, or configure OAuth2. Also check for provider "less secure app"/security alerts.';
-      } else if (/ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(msg)) {
-        msg = 'Connection failed to SMTP server. Check host, port and network connectivity.';
+      return { ok: true };
+    } catch (err: any) {
+      console.error('SendGrid verification error:', err?.response?.body || err?.message || err);
+
+      let message = 'Verification failed';
+      if (err?.code === 401 || err?.code === 403) {
+        message = 'Invalid API key. Please check your SendGrid API key.';
+      } else if (err?.response?.body?.errors?.[0]?.message) {
+        message = err.response.body.errors[0].message;
+      } else {
+        message = err?.message || 'Unknown error occurred';
       }
 
-      return { ok: false, message: msg };
+      return { ok: false, message };
     }
   }
 
@@ -115,25 +69,22 @@ export class EmailCredentialsService {
     return this.emailCredentialsModel.findOne({ businessId }).exec();
   }
 
-  async getDecryptedCredentials(businessId: string): Promise<{ email: string; password: string }> {
+  async getDecryptedCredentials(businessId: string): Promise<{ email: string; apiKey: string } | null> {
     const credentials = await this.emailCredentialsModel.findOne({ businessId }).exec();
-    
-    if (!credentials) {
-      return null;
-    }
+    if (!credentials) return null;
 
     const key = process.env.EMAIL_ENCRYPTION_KEY || '';
-    if (!key) {
-      throw new Error('EMAIL_ENCRYPTION_KEY is not configured on the server');
+    if (!key) throw new Error('EMAIL_ENCRYPTION_KEY is not configured on the server');
+
+    if (credentials.sendgridApiKey) {
+      return { email: credentials.email, apiKey: decryptText(credentials.sendgridApiKey, key) };
     }
 
-    // Prefer encryptedPassword; if only legacy passwordHash exists we can't decrypt it and must fail
+    // Fallback: if encryptedPassword exists (legacy SMTP usage), return it as password
     if (credentials.encryptedPassword) {
-      const decrypted = decryptText(credentials.encryptedPassword, key);
-      return { email: credentials.email, password: decrypted };
+      return { email: credentials.email, apiKey: decryptText(credentials.encryptedPassword, key) };
     }
 
-    // If we only have a legacy passwordHash, return null to indicate migration is required
     return null;
   }
 }

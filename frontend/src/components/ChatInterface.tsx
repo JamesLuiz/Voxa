@@ -52,16 +52,10 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
     setInput("");
     setIsTyping(true);
     try {
-      // If the UI provides an onStartVoice handler, trigger it so the
-      // voice session is opened and the agent is present to respond via voice.
-      try {
-        // persist the pending text so the voice room can publish it after connect
-        try { sessionStorage.setItem('voxa_pending_text', userMessage.content); } catch (e) {}
-        onStartVoice && onStartVoice();
-      } catch (e) {
-        // ignore errors from voice starter
-      }
-      if (onSend) {
+      // For owner mode we do NOT auto-start the voice session when sending text.
+      // Owners can use the voice recording button to open voice. We still call onStartVoice
+      // when recording is toggled elsewhere.
+  if (onSend) {
         const result = await onSend(userMessage.content);
         let reply = typeof result === "string" && result ? result : "Error: No response from agent.";
         const aiMessage: Message = {

@@ -14,7 +14,7 @@ export class EmailCredentialsController {
 
   @Post()
   async saveCredentials(
-    @Body() body: { businessId: string; email: string; password: string; smtpServer?: string; smtpPort?: number },
+    @Body() body: { businessId: string; email: string; apiKey?: string },
     @Req() req: Request,
   ) {
     // Rate limit by IP
@@ -31,28 +31,39 @@ export class EmailCredentialsController {
     if (entry.count > VERIFY_MAX) {
       return { success: false, verified: false, message: 'Too many verification attempts, please try again later' };
     }
-    const { businessId, email, password, smtpServer, smtpPort } = body;
+    const { businessId, email, apiKey } = body;
 
-    // Use Gmail defaults if not provided
-    const server = smtpServer || 'smtp.gmail.com';
-    const port = smtpPort || 587;
+    // If an apiKey was provided by the user, verify and save it (encrypted).
+    if (apiKey && apiKey.trim()) {
+      const verify = await this.emailCredentialsService.verifySendGrid(email, apiKey);
+      if (!verify.ok) {
+        return { success: false, verified: false, message: verify.message || 'SendGrid verification failed' };
+      }
 
-    // Verify SMTP credentials before saving
-    const verify = await this.emailCredentialsService.verifySmtp(email, password, server, port);
-    if (!verify.ok) {
-      return { success: false, verified: false, message: verify.message || 'SMTP verification failed' };
+      await this.emailCredentialsService.saveCredentials(businessId, email, apiKey);
+      return { success: true, verified: true, saved: true, message: 'SendGrid API key saved and verified' };
     }
 
-    // Save encrypted credentials
-    await this.emailCredentialsService.saveCredentials(businessId, email, password);
-    return { success: true, verified: true, message: 'Email credentials saved and verified' };
+    // No apiKey supplied by user: fall back to server-wide SEND_GRID if configured.
+    const serverKey = process.env.SEND_GRID || '';
+    if (serverKey) {
+      // Verify server key can send to the provided email (do not persist server key).
+      const verify = await this.emailCredentialsService.verifySendGrid(email, serverKey);
+      if (!verify.ok) {
+        return { success: false, verified: false, message: verify.message || 'Server SendGrid verification failed' };
+      }
+      return { success: true, verified: true, saved: false, message: 'Using server SendGrid key (not saved)' };
+    }
+
+    // Neither user apiKey nor server key available: instruct user to provide one.
+    return { success: false, verified: false, message: 'No SendGrid API key provided and no server default configured. Provide an API key or configure SEND_GRID in environment.' };
   }
 
   @Get(':businessId')
   async getCredentials(@Param('businessId') businessId: string) {
     const credentials = await this.emailCredentialsService.getCredentials(businessId);
     if (credentials) {
-      return { email: credentials.email, smtpServer: credentials.smtpServer, smtpPort: credentials.smtpPort };
+      return { email: credentials.email, hasSendGrid: !!credentials.sendgridApiKey, smtpServer: credentials.smtpServer, smtpPort: credentials.smtpPort };
     }
     return { error: 'Credentials not found' };
   }

@@ -27,9 +27,8 @@ const Register = () => {
     policies: "",
   // SMTP fields (optional) - allow entering during registration
   smtpEmail: "",
-  smtpPassword: "",
-  smtpServer: "smtp.gmail.com",
-  smtpPort: "587",
+  sendgridEmail: "",
+  sendgridApiKey: "",
   });
 
   const [showPassword, setShowPassword] = useState(false);
@@ -66,22 +65,22 @@ const Register = () => {
         localStorage.setItem("voxa_token", result.token || "");
         localStorage.setItem("voxa_business_id", result.businessId || "");
 
-        // If SMTP credentials were provided during registration, save them to backend
+        // If SendGrid credentials were provided during registration, save them to backend
         try {
-          const smtpEmail = formData.smtpEmail?.trim();
-          const smtpPassword = formData.smtpPassword || "";
-          if (smtpEmail && smtpPassword) {
+          const sgEmail = formData.sendgridEmail?.trim();
+          const sgApiKey = formData.sendgridApiKey || "";
+          if (sgEmail && sgApiKey) {
             const apiBase = import.meta.env.VITE_API_URL;
             await fetch(`${apiBase}/api/email-credentials`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ businessId: result.businessId, email: smtpEmail, password: smtpPassword, smtpServer: formData.smtpServer, smtpPort: Number(formData.smtpPort) })
+              body: JSON.stringify({ businessId: result.businessId, email: sgEmail, apiKey: sgApiKey })
             });
           }
         } catch (e) {
           // Non-blocking: registration succeeded; warn user via toast
-          console.warn('Failed to save SMTP credentials during registration', e);
-          toast.error('Registration succeeded but saving SMTP credentials failed. You can configure them later from Settings.');
+          console.warn('Failed to save SendGrid credentials during registration', e);
+          toast.error('Registration succeeded but saving SendGrid credentials failed. You can configure them later from Settings.');
         }
 
         toast.success("Registration complete");
@@ -348,49 +347,29 @@ const Register = () => {
 
             {step === 6 && (
               <div className="space-y-3 sm:space-y-4 animate-fade-in">
-                <h2 className="text-xl sm:text-2xl font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Email (SMTP) Settings</h2>
-                <p className="text-sm text-muted-foreground">Optional: provide your business email credentials so the agent can send emails on your behalf. You can also configure this later in Settings.</p>
+                <h2 className="text-xl sm:text-2xl font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Email (SendGrid) Settings</h2>
+                <p className="text-sm text-muted-foreground">Optional: provide your SendGrid API key so the agent can send emails on your behalf. You can also configure this later in Settings.</p>
                 <div>
-                  <Label htmlFor="smtpEmail" className="text-sm sm:text-base">Email</Label>
+                  <Label htmlFor="sendgridEmail" className="text-sm sm:text-base">Sender Email</Label>
                   <Input
-                    id="smtpEmail"
+                    id="sendgridEmail"
                     type="email"
-                    value={formData.smtpEmail}
-                    onChange={(e) => handleChange('smtpEmail', e.target.value)}
+                    value={formData.sendgridEmail}
+                    onChange={(e) => handleChange('sendgridEmail', e.target.value)}
                     placeholder="your-business@example.com"
                     className="mt-1 text-sm sm:text-base h-10 sm:h-11"
                   />
                 </div>
                 <div>
-                  <Label htmlFor="smtpPassword" className="text-sm sm:text-base">Password</Label>
+                  <Label htmlFor="sendgridApiKey" className="text-sm sm:text-base">SendGrid API Key</Label>
                   <Input
-                    id="smtpPassword"
+                    id="sendgridApiKey"
                     type="password"
-                    value={formData.smtpPassword}
-                    onChange={(e) => handleChange('smtpPassword', e.target.value)}
-                    placeholder="Your email password or app password"
+                    value={formData.sendgridApiKey}
+                    onChange={(e) => handleChange('sendgridApiKey', e.target.value)}
+                    placeholder="SG.xxxxx"
                     className="mt-1 text-sm sm:text-base h-10 sm:h-11"
                   />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label htmlFor="smtpServer" className="text-sm sm:text-base">SMTP Server</Label>
-                    <Input
-                      id="smtpServer"
-                      value={formData.smtpServer}
-                      onChange={(e) => handleChange('smtpServer', e.target.value)}
-                      className="mt-1 text-sm sm:text-base h-10 sm:h-11"
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor="smtpPort" className="text-sm sm:text-base">SMTP Port</Label>
-                    <Input
-                      id="smtpPort"
-                      value={formData.smtpPort}
-                      onChange={(e) => handleChange('smtpPort', e.target.value)}
-                      className="mt-1 text-sm sm:text-base h-10 sm:h-11"
-                    />
-                  </div>
                 </div>
               </div>
             )}

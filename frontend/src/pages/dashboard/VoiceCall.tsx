@@ -16,7 +16,7 @@ import {
   TrackToggle,
 } from "@livekit/components-react";
 import "@livekit/components-styles";
-import { Track } from "livekit-client";
+import { Track, DataPacket_Kind } from "livekit-client";
 
 type LocationState = { token?: string; serverUrl?: string };
 
@@ -91,14 +91,14 @@ const VoiceCall = () => {
   return (
     <div className="min-h-[calc(100vh-6rem)] p-3 sm:p-4 md:p-6 flex items-center justify-center">
       <LiveKitRoom serverUrl={serverUrl} token={token} connect audio video style={{ height: "auto", width: "100%" }}>
-  <PublishPendingText />
+        <PublishPendingText />
         <div className="w-full max-w-4xl glass rounded-xl sm:rounded-2xl p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0 mb-4 sm:mb-6">
             <div>
               <h2 className="text-lg sm:text-xl font-semibold">Realtime Voice Session</h2>
               <p className="text-xs sm:text-sm text-muted-foreground">Connected</p>
             </div>
-            <EndButton onEnded={() => navigate(-1)} />
+            <EndButton onEnded={() => { sessionStorage.removeItem('voxa_call_active'); navigate(-1); }} />
           </div>
           <div className="rounded-lg border border-border overflow-hidden">
             <div className="grid grid-rows-[auto_1fr] sm:grid-rows-[1fr_auto]">
@@ -204,25 +204,21 @@ function PublishPendingText() {
   const room = useRoomContext();
   // publish pending text once when the room/local participant is ready
   useEffect(() => {
-    let cancelled = false;
-    const tryPublish = async () => {
-      const pending = sessionStorage.getItem('voxa_pending_text');
-      if (!pending) return;
+    let active = true;
+
+    const publishIfPending = async () => {
       try {
+        const pending = sessionStorage.getItem('voxa_pending_text');
+        if (!pending) return;
         const lp: any = (room as any)?.localParticipant;
         const publishData = async () => {
           try {
-            // publishData expects Uint8Array
             const enc = new TextEncoder().encode(pending);
-            // DataPacket_Kind is available from livekit-client
-            // eslint-disable-next-line global-require
-            const { DataPacket_Kind } = require('livekit-client');
             if (lp && typeof lp.publishData === 'function') {
               await lp.publishData(enc, DataPacket_Kind.RELIABLE);
               sessionStorage.removeItem('voxa_pending_text');
             }
           } catch (err) {
-            // fallback: ignore
             // eslint-disable-next-line no-console
             console.warn('Failed to publish pending text', err);
           }
@@ -238,8 +234,30 @@ function PublishPendingText() {
         console.warn(e);
       }
     };
-    tryPublish();
-    return () => { cancelled = true };
+
+    // mark call active for other tabs/components
+    sessionStorage.setItem('voxa_call_active', '1');
+
+    // publish initially if pending
+    publishIfPending();
+
+    // listen for explicit publish triggers from ChatAI (send-as-voice toggle)
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === 'voxa_publish_trigger') {
+        publishIfPending();
+      }
+      if (ev.key === 'voxa_call_active' && ev.newValue == null) {
+        // cleared by consumer on end
+      }
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      active = false;
+      window.removeEventListener('storage', onStorage);
+      // clear call active flag
+      try { sessionStorage.removeItem('voxa_call_active'); } catch {}
+    };
   }, [room]);
   return null;
 }

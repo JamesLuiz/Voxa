@@ -23,6 +23,10 @@ export class EmailCredentials {
 
   @Prop({ default: 587 })
   smtpPort: number;
+
+  @Prop({ required: false })
+  // Encrypted SendGrid API key for SendGrid usage
+  sendgridApiKey?: string;
 }
 
 export const EmailCredentialsSchema = SchemaFactory.createForClass(EmailCredentials);

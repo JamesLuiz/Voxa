@@ -4,7 +4,7 @@ import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff, Mic } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { customerChat, getLivekitToken, upsertCustomer } from "@/lib/api";
+import { customerChat, ownerChat, getLivekitToken, upsertCustomer } from "@/lib/api";
 import { getCustomerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
@@ -15,9 +15,11 @@ import {
 } from "@livekit/components-react";
 import "@livekit/components-styles";
 import { GridLayout, ParticipantTile, TrackToggle, useRoomContext } from "@livekit/components-react";
-import { Track } from "livekit-client";
+import { Track, DataPacket_Kind } from "livekit-client";
+const API_BASE = import.meta.env.VITE_API_URL ;
 
-const CustomerChat = () => {
+
+const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) => {
   const { slug = "" } = useParams();
   const [businessId, setBusinessId] = useState<string>("");
   const [businessName, setBusinessName] = useState<string>("Acme Corp");
@@ -33,7 +35,7 @@ const CustomerChat = () => {
     (async () => {
       if (!slug) return;
       try {
-        const res = await fetch(`/api/business/by-slug/${encodeURIComponent(slug)}`);
+        const res = await fetch(`${API_BASE}/api/business/by-slug/${encodeURIComponent(slug)}`);
         if (res.ok) {
           const data = await res.json();
           if (data?.businessId) setBusinessId(data.businessId);
@@ -43,8 +45,8 @@ const CustomerChat = () => {
         // ignore; UI can show generic state
       }
     })();
-    // On mount, if no customerId, start collecting info
-    if (!customerId) setCollectStep('name');
+  // On mount, if no customerId and we're a customer, start collecting info
+  if (!customerId && role === 'customer') setCollectStep('name');
   }, [customerId, slug]);
 
   async function handleCustomerIdentityInput(input: string): Promise<string> {
@@ -60,20 +62,24 @@ const CustomerChat = () => {
       setCollectStep('phone');
       return "Great. Now, please enter your phone number.";
     } else if (collectStep === 'phone') {
-      setPendingCustomerInfo((prev) => ({ ...prev, phone: input.trim() }));
+      // finalize pending info and upsert using collected values
+      const finalInfo = { ...pendingCustomerInfo, phone: input.trim() };
+      setPendingCustomerInfo(finalInfo);
       setCollectStep('done');
-      // Upsert customer now
       try {
-        const { _id } = await upsertCustomer({
+        const res: any = await upsertCustomer({
           businessId,
-          name: pendingCustomerInfo.name || '',
-          email: pendingCustomerInfo.email || '',
-          phone: input.trim(),
+          name: finalInfo.name || '',
+          email: finalInfo.email || '',
+          phone: finalInfo.phone || '',
         });
-        setCustomerId(_id);
-        sessionStorage.setItem('customerId', _id);
+        const _id = res?._id || res?.id || null;
+        if (_id) {
+          setCustomerId(_id);
+          sessionStorage.setItem('customerId', _id);
+        }
         return "Thank you! A support ticket can now be created or continued.";
-      } catch {
+      } catch (err) {
         setCollectStep('none');
         return "Sorry, we could not save your info. Please try again later.";
       }
@@ -91,11 +97,20 @@ const CustomerChat = () => {
   const handleStartCall = async () => {
     setIsConnecting(true);
     try {
-      const info = await getLivekitToken({ role: "customer", businessId });
+      const info = await getLivekitToken({ role: role === 'owner' ? 'owner' : 'customer', businessId });
       setLivekitInfo(info);
       // In a full implementation, connect to LiveKit using info.token and info.serverUrl or getCustomerRoomUrl
       // const roomUrl = getCustomerRoomUrl(businessId);
       setIsCallActive(true);
+      // If owner is initiating the call, notify backend so agent can fetch
+      // customer details and greet them when the room connects.
+      if (role === 'owner') {
+        try {
+          await ownerChat('call_started', { businessId });
+        } catch (e) {
+          // ignore
+        }
+      }
     } catch (e) {
       // noop: surface via toast in future
     } finally {
@@ -272,7 +287,11 @@ const CustomerChat = () => {
             </p>
           </div>
           <div className="flex-1">
-            <ChatInterface mode="customer" businessName={businessName} onSend={async (text) => {
+            <ChatInterface mode={role === 'owner' ? 'owner' : 'customer'} businessName={businessName} onSend={async (text) => {
+              if (role === 'owner') {
+                const r = await ownerChat(text);
+                return r || 'AI did not respond';
+              }
               if (!customerId || collectStep !== 'done') {
                 return await handleCustomerIdentityInput(text);
               }
@@ -305,8 +324,6 @@ function PublishPendingText() {
     const publishData = async () => {
       try {
         const enc = new TextEncoder().encode(pending);
-        // eslint-disable-next-line global-require
-        const { DataPacket_Kind } = require('livekit-client');
         if (lp && typeof lp.publishData === 'function') {
           await lp.publishData(enc, DataPacket_Kind.RELIABLE);
           sessionStorage.removeItem('voxa_pending_text');
