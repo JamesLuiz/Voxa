@@ -19,15 +19,23 @@ const Register = () => {
     ownerPassword: "",
     businessName: "",
     businessType: "",
+    businessEmail: "",
+    businessPhone: "",
+    businessWebsite: "",
     description: "",
     products: "",
     policies: "",
+  // SMTP fields (optional) - allow entering during registration
+  smtpEmail: "",
+  smtpPassword: "",
+  smtpServer: "smtp.gmail.com",
+  smtpPort: "587",
   });
 
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<{ [k: string]: string }>({});
 
-  const totalSteps = 5;
+  const totalSteps = 6;
   const progress = (step / totalSteps) * 100;
 
   const handleNext = async () => {
@@ -38,20 +46,44 @@ const Register = () => {
     if (step < totalSteps) {
       setStep(step + 1);
     } else {
-      // Registration complete -> call backend
+      // Registration complete -> call backend and optionally save SMTP credentials
       try {
         const result = await registerOwnerBusiness({
           owner: { name: formData.ownerName, email: formData.ownerEmail, password: formData.ownerPassword },
           business: {
             name: formData.businessName,
             industry: formData.businessType,
+            email: formData.businessEmail,
+            phone: formData.businessPhone,
+            website: formData.businessWebsite,
             description: formData.description,
             products: formData.products.split(",").map((s) => s.trim()).filter(Boolean),
             policies: formData.policies,
           },
         });
+
+        // Store token and businessId
         localStorage.setItem("voxa_token", result.token || "");
         localStorage.setItem("voxa_business_id", result.businessId || "");
+
+        // If SMTP credentials were provided during registration, save them to backend
+        try {
+          const smtpEmail = formData.smtpEmail?.trim();
+          const smtpPassword = formData.smtpPassword || "";
+          if (smtpEmail && smtpPassword) {
+            const apiBase = import.meta.env.VITE_API_URL;
+            await fetch(`${apiBase}/api/email-credentials`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ businessId: result.businessId, email: smtpEmail, password: smtpPassword, smtpServer: formData.smtpServer, smtpPort: Number(formData.smtpPort) })
+            });
+          }
+        } catch (e) {
+          // Non-blocking: registration succeeded; warn user via toast
+          console.warn('Failed to save SMTP credentials during registration', e);
+          toast.error('Registration succeeded but saving SMTP credentials failed. You can configure them later from Settings.');
+        }
+
         toast.success("Registration complete");
         navigate("/dashboard");
       } catch (e: unknown) {
@@ -97,6 +129,13 @@ const Register = () => {
       if (!formData.ownerPassword) newErrors.ownerPassword = "Required";
       else if (!validatePassword(formData.ownerPassword)) newErrors.ownerPassword = "Password must be at least 8 characters and include upper and lower case letters";
     }
+    if (s === 2) {
+      if (!formData.businessName.trim()) newErrors.businessName = "Required";
+      if (!formData.businessType.trim()) newErrors.businessType = "Required";
+      if (!formData.businessEmail.trim()) newErrors.businessEmail = "Required";
+      else if (!validateEmail(formData.businessEmail)) newErrors.businessEmail = "Enter a valid email";
+      if (!formData.businessPhone.trim()) newErrors.businessPhone = "Required";
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -111,7 +150,14 @@ const Register = () => {
       );
     }
     // For other steps, require non-empty required fields
-    if (step === 2) return formData.businessName.trim() && formData.businessType.trim();
+    if (step === 2) {
+      return (
+        formData.businessName.trim() &&
+        formData.businessType.trim() &&
+        validateEmail(formData.businessEmail) &&
+        formData.businessPhone.trim()
+      );
+    }
     return true;
   };
 
@@ -201,6 +247,7 @@ const Register = () => {
                     placeholder="Acme Corp"
                     className="mt-1 text-sm sm:text-base h-10 sm:h-11"
                   />
+                  {errors.businessName && <p className="text-xs sm:text-sm text-destructive mt-1">{errors.businessName}</p>}
                 </div>
                 <div>
                   <Label htmlFor="businessType" className="text-sm sm:text-base">Business Type</Label>
@@ -209,6 +256,42 @@ const Register = () => {
                     value={formData.businessType}
                     onChange={(e) => handleChange("businessType", e.target.value)}
                     placeholder="E-commerce, SaaS, etc."
+                    className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                  />
+                  {errors.businessType && <p className="text-xs sm:text-sm text-destructive mt-1">{errors.businessType}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="businessEmail" className="text-sm sm:text-base">Business Email</Label>
+                  <Input
+                    id="businessEmail"
+                    type="email"
+                    value={formData.businessEmail}
+                    onChange={(e) => handleChange("businessEmail", e.target.value)}
+                    placeholder="contact@acmecorp.com"
+                    className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                  />
+                  {errors.businessEmail && <p className="text-xs sm:text-sm text-destructive mt-1">{errors.businessEmail}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="businessPhone" className="text-sm sm:text-base">Business Phone</Label>
+                  <Input
+                    id="businessPhone"
+                    type="tel"
+                    value={formData.businessPhone}
+                    onChange={(e) => handleChange("businessPhone", e.target.value)}
+                    placeholder="+1 (555) 123-4567"
+                    className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                  />
+                  {errors.businessPhone && <p className="text-xs sm:text-sm text-destructive mt-1">{errors.businessPhone}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="businessWebsite" className="text-sm sm:text-base">Business Website (Optional)</Label>
+                  <Input
+                    id="businessWebsite"
+                    type="url"
+                    value={formData.businessWebsite}
+                    onChange={(e) => handleChange("businessWebsite", e.target.value)}
+                    placeholder="https://www.acmecorp.com"
                     className="mt-1 text-sm sm:text-base h-10 sm:h-11"
                   />
                 </div>
@@ -259,6 +342,55 @@ const Register = () => {
                     placeholder="Refund policy, support hours, terms of service..."
                     className="mt-1 min-h-28 sm:min-h-32 text-sm sm:text-base"
                   />
+                </div>
+              </div>
+            )}
+
+            {step === 6 && (
+              <div className="space-y-3 sm:space-y-4 animate-fade-in">
+                <h2 className="text-xl sm:text-2xl font-semibold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">Email (SMTP) Settings</h2>
+                <p className="text-sm text-muted-foreground">Optional: provide your business email credentials so the agent can send emails on your behalf. You can also configure this later in Settings.</p>
+                <div>
+                  <Label htmlFor="smtpEmail" className="text-sm sm:text-base">Email</Label>
+                  <Input
+                    id="smtpEmail"
+                    type="email"
+                    value={formData.smtpEmail}
+                    onChange={(e) => handleChange('smtpEmail', e.target.value)}
+                    placeholder="your-business@example.com"
+                    className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="smtpPassword" className="text-sm sm:text-base">Password</Label>
+                  <Input
+                    id="smtpPassword"
+                    type="password"
+                    value={formData.smtpPassword}
+                    onChange={(e) => handleChange('smtpPassword', e.target.value)}
+                    placeholder="Your email password or app password"
+                    className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label htmlFor="smtpServer" className="text-sm sm:text-base">SMTP Server</Label>
+                    <Input
+                      id="smtpServer"
+                      value={formData.smtpServer}
+                      onChange={(e) => handleChange('smtpServer', e.target.value)}
+                      className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="smtpPort" className="text-sm sm:text-base">SMTP Port</Label>
+                    <Input
+                      id="smtpPort"
+                      value={formData.smtpPort}
+                      onChange={(e) => handleChange('smtpPort', e.target.value)}
+                      className="mt-1 text-sm sm:text-base h-10 sm:h-11"
+                    />
+                  </div>
                 </div>
               </div>
             )}

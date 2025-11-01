@@ -52,29 +52,59 @@ async def send_email(
     to_email: str,
     subject: str,
     message: str,
+    business_id: str,
     cc_email: Optional[str] = None
 ) -> str:
     """
-    Send an email through Gmail.
+    Send an email using the business's stored email credentials.
     
     Args:
         to_email: Recipient email address
         subject: Email subject line
         message: Email body content
+        business_id: ID of the business whose credentials to use
         cc_email: Optional CC email address
     """
     try:
-        # Gmail SMTP configuration
-        smtp_server = "smtp.gmail.com"
-        smtp_port = 587
+        # Get backend URL from environment or use default
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         
-        # Get credentials from environment variables
-        gmail_user = os.getenv("GMAIL_USER")
-        gmail_password = os.getenv("GMAIL_APP_PASSWORD")  # Use App Password, not regular password
+        # Fetch email credentials from the backend
+        response = requests.get(
+            f"{backend_url}/api/email-credentials/{business_id}",
+            headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
+            timeout=10
+        )
+        
+        if response.status_code != 200:
+            logger.warning(f"Failed to fetch email credentials for business {business_id}")
+            return "Email sending failed: Could not retrieve email credentials."
+        
+        credentials = response.json()
+        
+        # SMTP configuration
+        smtp_server = credentials.get('smtpServer', 'smtp.gmail.com')
+        smtp_port = credentials.get('smtpPort', 587)
+        gmail_user = credentials.get('email')
+        
+    # Request the full credentials (this endpoint returns the decrypted password when the request
+    # is authorized with the BACKEND_API_KEY).
+        password_response = requests.get(
+            f"{backend_url}/api/email-credentials/{business_id}/full",
+            headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
+            timeout=10
+        )
+        
+        if password_response.status_code != 200:
+            logger.warning(f"Failed to fetch email password for business {business_id}")
+            return "Email sending failed: Could not retrieve email password."
+        
+        full_credentials = password_response.json()
+        gmail_password = full_credentials.get('password')
         
         if not gmail_user or not gmail_password:
-            logger.warning("Gmail credentials not found in environment variables")
-            return "Email sending failed: Gmail credentials not configured."
+            logger.warning("Email credentials incomplete")
+            return "Email sending failed: Email credentials not properly configured."
         
         # Create message
         msg = MIMEMultipart()
@@ -91,7 +121,7 @@ async def send_email(
         # Attach message body
         msg.attach(MIMEText(message, 'plain'))
         
-        # Connect to Gmail SMTP server
+        # Connect to SMTP server
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()  # Enable TLS encryption
         server.login(gmail_user, gmail_password)
@@ -105,8 +135,8 @@ async def send_email(
         return f"Email sent successfully to {to_email}"
         
     except smtplib.SMTPAuthenticationError:
-        logger.warning("Gmail authentication failed")
-        return "Email sending failed: Authentication error. Please check your Gmail credentials."
+        logger.warning("Email authentication failed")
+        return "Email sending failed: Authentication error. Please check your email credentials."
     except smtplib.SMTPException as e:
         logger.warning(f"SMTP error occurred: {e}")
         return f"Email sending failed: SMTP error - {str(e)}"
@@ -126,7 +156,7 @@ async def crm_lookup(
         email: Customer email address
     """
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         response = requests.get(
             f"{backend_url}/api/crm/customers/email/{email}",
             headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
@@ -164,7 +194,7 @@ async def get_customer_history(
         email: Customer email address
     """
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         
         # Get customer first
         customer_response = requests.get(
@@ -215,7 +245,7 @@ async def create_ticket(
     Create a support ticket with best-effort customer look-up or upsert first.
     """
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         customer_id = None
         # Try to look up by email + business
         if customer_email and business_id:
@@ -267,7 +297,7 @@ async def schedule_meeting(
         attendees: Comma-separated list of attendee emails
     """
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         
         meeting_data = {
             "title": title,
@@ -302,7 +332,7 @@ async def schedule_meeting(
 async def get_business_context(context: RunContext, business_id: str) -> str:
     """Fetch business description, products, policies for AI context"""
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         resp = requests.get(f"{backend_url}/api/business/context/{business_id}", timeout=10)
         if resp.status_code == 200:
             return resp.text
@@ -315,7 +345,7 @@ async def get_business_context(context: RunContext, business_id: str) -> str:
 async def manage_customer(context: RunContext, action: str, data: dict) -> str:
     """CRM: 'upsert', 'create', 'update', 'delete', 'search' customers, always returns full customer object as JSON"""
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         if action == 'upsert':
             r = requests.post(f"{backend_url}/api/crm/customers/upsert", json=data, timeout=10)
             return r.text
@@ -343,7 +373,7 @@ async def manage_customer(context: RunContext, action: str, data: dict) -> str:
 async def update_ticket(context: RunContext, ticket_id: str, status: str, notes: str = "") -> str:
     """Update ticket status (owner only)"""
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         out = {}
         r = requests.put(f"{backend_url}/api/tickets/{ticket_id}/status", json={"status": status}, timeout=10)
         out['status'] = r.json()
@@ -359,7 +389,7 @@ async def update_ticket(context: RunContext, ticket_id: str, status: str, notes:
 async def get_analytics(context: RunContext, metric: str, business_id: str) -> str:
     """Get business metrics: 'overview'|'tickets'|'customers'"""
     try:
-        backend_url = os.getenv("BACKEND_URL", "http://localhost:3000")
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
         r = requests.get(f"{backend_url}/api/analytics/{metric}", params={"businessId": business_id}, timeout=10)
         return r.text
     except Exception as e:

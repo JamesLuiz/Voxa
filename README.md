@@ -32,6 +32,9 @@ LIVEKIT_URL=wss://voice-assistant-zcs1h1kx.livekit.cloud
 LIVEKIT_API_KEY=your_api_key_here
 LIVEKIT_API_SECRET=your_api_secret_here
 MISTRAL_API_KEY=your_mistral_api_key_here
+BACKEND_URL=https://voxa-smoky.vercel.app
+BACKEND_API_KEY=your_backend_api_key_here
+REDIS_URL=redis://localhost:6379  # Optional: for conversation history persistence
 ```
 
 Update `backend/.env`:

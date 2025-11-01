@@ -7,9 +7,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: ['http://localhost:8080', 'https://voxa-smoky.vercel.app'],
-    methods: ['GET','HEAD','PUT','PATCH','POST','DELETE','OPTIONS'],
-    allowedHeaders: ['Content-Type','Authorization','Accept','Origin','X-Requested-With'],
+    origin: ['http://localhost:8080'],
     credentials: true,
   });
 

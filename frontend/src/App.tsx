@@ -16,6 +16,7 @@ import Meetings from "./pages/dashboard/Meetings";
 import Analytics from "./pages/dashboard/Analytics";
 import CustomerChat from "./pages/CustomerChat";
 import NotFound from "./pages/NotFound";
+import Settings from "./pages/Settings";
 
 const queryClient = new QueryClient();
 
@@ -37,7 +38,7 @@ const App = () => (
             <Route path="tickets" element={<Tickets />} />
             <Route path="meetings" element={<Meetings />} />
             <Route path="analytics" element={<Analytics />} />
-            <Route path="settings" element={<div className="text-center py-20 text-muted-foreground">Settings coming soon</div>} />
+            <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/chat/:slug" element={<CustomerChat />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
