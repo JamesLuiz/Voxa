@@ -15,10 +15,19 @@ export class LiveKitService {
     this.roomService = new RoomServiceClient(this.url, this.apiKey, this.apiSecret);
   }
 
-  async createToken(roomName: string, participantName: string): Promise<string> {
+  async createToken(
+    roomName: string,
+    participantName: string,
+    metadata?: Record<string, any>
+  ): Promise<string> {
     const at = new AccessToken(this.apiKey, this.apiSecret, {
       identity: participantName,
     });
+
+    // Set metadata if provided
+    if (metadata) {
+      at.metadata = JSON.stringify(metadata);
+    }
 
     at.addGrant({
       roomJoin: true,

@@ -230,9 +230,31 @@ async def create_ticket(
 ) -> str:
     """
     Create a support ticket with best-effort customer look-up or upsert first.
+    If business_id is not provided, attempt to extract from context/room metadata.
     """
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        
+        # Try to get business_id from context if not provided
+        if not business_id and context:
+            try:
+                # Attempt to get from room metadata via context
+                if hasattr(context, 'room') and context.room:
+                    room_meta = getattr(context.room, 'metadata', {}) if hasattr(context.room, 'metadata') else {}
+                    if isinstance(room_meta, str):
+                        import json as _json
+                        try:
+                            room_meta = _json.loads(room_meta)
+                        except:
+                            room_meta = {}
+                    if isinstance(room_meta, dict) and room_meta.get('businessId'):
+                        business_id = room_meta.get('businessId')
+            except Exception:
+                pass
+        
+        if not business_id:
+            return "Error: Business ID is required to create a ticket. Please provide the business context."
+        
         customer_id = None
         # Try to look up by email + business
         if customer_email and business_id:
@@ -249,10 +271,11 @@ async def create_ticket(
             "businessId": business_id,
             "customerId": customer_id,
         }
+        headers = {"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"}
         response = requests.post(
             f"{backend_url}/api/tickets",
             json=ticket_data,
-            headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
+            headers=headers,
             timeout=10
         )
         if response.status_code in (200, 201):
@@ -260,8 +283,8 @@ async def create_ticket(
             logger.debug(f"Created ticket: {ticket.get('_id')}")
             return f"Support ticket created successfully. Ticket ID: {ticket.get('_id', 'N/A')}"
         else:
-            logger.warning(f"Failed to create ticket: {response.status_code}")
-            return "Failed to create support ticket"
+            logger.warning(f"Failed to create ticket: {response.status_code} {response.text}")
+            return f"Failed to create support ticket: {response.text}"
     except Exception as e:
         logger.warning(f"Error creating ticket: {e}")
         return f"An error occurred while creating ticket: {str(e)}"
@@ -320,9 +343,15 @@ async def get_business_context(context: RunContext, business_id: str) -> str:
     """Fetch business description, products, policies for AI context"""
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
-        resp = requests.get(f"{backend_url}/api/business/context/{business_id}", timeout=10)
+        headers = {}
+        api_key = os.getenv('BACKEND_API_KEY', '')
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        resp = requests.get(f"{backend_url}/api/business/context/{business_id}", headers=headers, timeout=10)
         if resp.status_code == 200:
-            return resp.text
+            # Return as JSON string for parsing
+            import json as _json
+            return _json.dumps(resp.json())
         return "{}"
     except Exception as e:
         logger.warning(f"Error fetching business context: {e}")
@@ -330,26 +359,47 @@ async def get_business_context(context: RunContext, business_id: str) -> str:
 
 @function_tool()
 async def manage_customer(context: RunContext, action: str, data: dict) -> str:
-    """CRM: 'upsert', 'create', 'update', 'delete', 'search' customers, always returns full customer object as JSON"""
+    """CRM: 'upsert', 'create', 'update', 'delete', 'search' customers, always returns full customer object as JSON.
+    If businessId is missing in data, attempt to extract from context."""
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        headers = {}
+        api_key = os.getenv('BACKEND_API_KEY', '')
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        
+        # Try to get businessId from context if not in data
+        if not data.get('businessId') and context:
+            try:
+                if hasattr(context, 'room') and context.room:
+                    room_meta = getattr(context.room, 'metadata', {}) if hasattr(context.room, 'metadata') else {}
+                    if isinstance(room_meta, str):
+                        import json as _json
+                        try:
+                            room_meta = _json.loads(room_meta)
+                        except:
+                            room_meta = {}
+                    if isinstance(room_meta, dict) and room_meta.get('businessId'):
+                        data['businessId'] = room_meta.get('businessId')
+            except Exception:
+                pass
+        
         if action == 'upsert':
-            r = requests.post(f"{backend_url}/api/crm/customers/upsert", json=data, timeout=10)
+            r = requests.post(f"{backend_url}/api/crm/customers/upsert", json=data, headers=headers, timeout=10)
             return r.text
         if action == 'create':
-            r = requests.post(f"{backend_url}/api/crm/customers", json=data, timeout=10)
+            r = requests.post(f"{backend_url}/api/crm/customers", json=data, headers=headers, timeout=10)
             return r.text
         if action == 'update':
-            r = requests.put(f"{backend_url}/api/crm/customers/{data.get('id')}", json=data, timeout=10)
+            r = requests.put(f"{backend_url}/api/crm/customers/{data.get('id')}", json=data, headers=headers, timeout=10)
             return r.text
         if action == 'delete':
-            import requests as rq
-            r = rq.delete(f"{backend_url}/api/crm/customers/{data.get('id')}", timeout=10)
+            r = requests.delete(f"{backend_url}/api/crm/customers/{data.get('id')}", headers=headers, timeout=10)
             return r.text
         if action == 'search':
             q = data.get('q', '')
             business_id = data.get('businessId', '')
-            r = requests.get(f"{backend_url}/api/crm/customers/search", params={"q": q, "businessId": business_id}, timeout=10)
+            r = requests.get(f"{backend_url}/api/crm/customers/search", params={"q": q, "businessId": business_id}, headers=headers, timeout=10)
             return r.text
         return "{}"
     except Exception as e:

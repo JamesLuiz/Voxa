@@ -49,14 +49,27 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
     };
 
     setMessages((prev) => [...prev, userMessage]);
+    const messageText = input;
     setInput("");
     setIsTyping(true);
     try {
       // For owner mode we do NOT auto-start the voice session when sending text.
       // Owners can use the voice recording button to open voice. We still call onStartVoice
       // when recording is toggled elsewhere.
-  if (onSend) {
-        const result = await onSend(userMessage.content);
+      // If a call is active, send text via LiveKit data channel
+      const isCallActive = sessionStorage.getItem('voxa_call_active');
+      if (isCallActive) {
+        // Store in sessionStorage for PublishPendingText to send
+        sessionStorage.setItem('voxa_pending_text', JSON.stringify({
+          type: 'text_message',
+          text: messageText
+        }));
+        // Trigger publish
+        sessionStorage.setItem('voxa_publish_trigger', Date.now().toString());
+      }
+      
+      if (onSend) {
+        const result = await onSend(messageText);
         let reply = typeof result === "string" && result ? result : "Error: No response from agent.";
         const aiMessage: Message = {
           id: (Date.now() + 1).toString(),

@@ -145,33 +145,49 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
         onClick={async () => {
           try {
             const local = (room as any)?.localParticipant;
+
             if (local) {
               try {
+                // Prefer SDK methods if available. We call publication.unpublish() (if present)
+                // and then stop the underlying media track. Avoid calling participant-level
+                // unpublish helpers with raw MediaStreamTracks which can cause the SDK to
+                // forward the wrong type to RTCPeerConnection.removeTrack (causing the
+                // "Argument 1 is not of type 'RTCRtpSender'" TypeError).
                 if (typeof local.getTrackPublications === 'function') {
                   const pubs: any[] = Array.from(local.getTrackPublications() as Iterable<any>);
                   for (const p of pubs) {
                     try {
+                      // If the publication exposes an unpublish method, use it.
                       if (p && typeof p.unpublish === 'function') {
                         try { await p.unpublish(); } catch {}
                       }
+
+                      // Stop the underlying media track (if present). The track may be
+                      // a LocalAudioTrack/LocalVideoTrack wrapper with a `stop()` method
+                      // or a plain MediaStreamTrack in some older SDK shapes.
                       const maybeTrack = (p as any)?.track ?? (p as any)?.mediaStreamTrack;
                       if (maybeTrack && typeof maybeTrack.stop === 'function') {
                         try { maybeTrack.stop(); } catch {}
                       }
                     } catch (err) {
                       // eslint-disable-next-line no-console
-                      console.warn('could not unpublish/stop publication', err);
+                      console.warn('could not unpublish/stop publication', { room: room?.name, error: err });
                     }
                   }
                 } else if (local && (local.tracks instanceof Map || (local.tracks && typeof local.tracks.values === 'function'))) {
+                  // Older SDK shapes: iterate track values and attempt to unpublish/stop
                   const vals = Array.from((local.tracks as Map<any, any>).values());
                   for (const t of vals) {
                     try {
-                      if (t && typeof t.unpublish === 'function') try { await t.unpublish(); } catch {}
-                      if (t && typeof (t as any).stop === 'function') try { (t as any).stop(); } catch {}
+                      if (t && typeof t.unpublish === 'function') {
+                        try { await t.unpublish(); } catch {}
+                      }
+                      if (t && typeof (t as any).stop === 'function') {
+                        try { (t as any).stop(); } catch {}
+                      }
                     } catch (err) {
                       // eslint-disable-next-line no-console
-                      console.warn('could not unpublish/stop track', err);
+                      console.warn('could not unpublish/stop track', { room: room?.name, error: err });
                     }
                   }
                 }
@@ -179,14 +195,18 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
                 // eslint-disable-next-line no-console
                 console.warn('could not cleanup local participant tracks', err);
               }
-            } else if (typeof room?.disconnect === 'function') {
-              // fallback: disconnect if we have no local participant
-              try { await room.disconnect(); } catch {}
+            } else {
+              // no local participant - as last resort disconnect
+              // If there's no local participant, try disconnect as a last resort.
+              if (typeof room?.disconnect === 'function') {
+                try { await room.disconnect(); } catch (e) { /* ignore */ }
+              }
             }
           } catch (e) {
             // eslint-disable-next-line no-console
             console.warn('error while ending call', e);
           }
+
           onEnded();
         }}
       >
@@ -318,27 +338,72 @@ export default CustomerChat;
 function PublishPendingText() {
   const room = useRoomContext();
   useEffect(() => {
-    const pending = sessionStorage.getItem('voxa_pending_text');
-    if (!pending) return;
-    const lp: any = (room as any)?.localParticipant;
-    const publishData = async () => {
+    let active = true;
+
+    const publishIfPending = async () => {
       try {
-        const enc = new TextEncoder().encode(pending);
+        const pending = sessionStorage.getItem('voxa_pending_text');
+        if (!pending) return;
+        const lp: any = (room as any)?.localParticipant;
+        const publishData = async () => {
+          try {
+            // Parse if JSON, otherwise use as string
+            let dataToSend = pending;
+            try {
+              const parsed = JSON.parse(pending);
+              if (parsed && parsed.type === 'text_message' && parsed.text) {
+                dataToSend = JSON.stringify(parsed);
+              }
+            } catch {
+              // Not JSON, use as is
+            }
+            
+            const enc = new TextEncoder().encode(dataToSend);
+            if (lp && typeof lp.publishData === 'function') {
+              await lp.publishData(enc, DataPacket_Kind.RELIABLE);
+              sessionStorage.removeItem('voxa_pending_text');
+            }
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn('Failed to publish pending text', err);
+          }
+        };
+
         if (lp && typeof lp.publishData === 'function') {
-          await lp.publishData(enc, DataPacket_Kind.RELIABLE);
-          sessionStorage.removeItem('voxa_pending_text');
+          await publishData();
+        } else if (room && typeof (room as any).once === 'function') {
+          (room as any).once('connected', publishData);
         }
-      } catch (err) {
+      } catch (e) {
         // eslint-disable-next-line no-console
-        console.warn('Failed to publish pending text', err);
+        console.warn(e);
       }
     };
 
-    if (lp && typeof lp.publishData === 'function') {
-      publishData();
-    } else if (room && typeof (room as any).once === 'function') {
-      (room as any).once('connected', publishData);
-    }
+    // Publish initially if pending
+    publishIfPending();
+
+    // Listen for explicit publish triggers
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key === 'voxa_publish_trigger' && active) {
+        publishIfPending();
+      }
+    };
+
+    window.addEventListener('storage', onStorage);
+    
+    // Also poll for pending messages
+    const interval = setInterval(() => {
+      if (active) {
+        publishIfPending();
+      }
+    }, 1000);
+
+    return () => {
+      active = false;
+      window.removeEventListener('storage', onStorage);
+      clearInterval(interval);
+    };
   }, [room]);
   return null;
 }
