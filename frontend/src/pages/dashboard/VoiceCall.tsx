@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { PhoneOff } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getLivekitToken } from "@/lib/api";
+import { getLivekitToken } from "@/lib/api.ts";
 import { getOwnerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,

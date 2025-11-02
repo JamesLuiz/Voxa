@@ -4,7 +4,7 @@ import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff, Mic } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { customerChat, ownerChat, getLivekitToken, upsertCustomer } from "@/lib/api";
+import { customerChat, ownerChat, getLivekitToken, upsertCustomer } from "@/lib/api.ts";
 import { getCustomerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,

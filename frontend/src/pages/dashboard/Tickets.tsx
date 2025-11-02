@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { listTickets, updateTicketStatus } from "@/lib/api";
+import { listTickets, updateTicketStatus } from "@/lib/api.ts";
 
 const filters = ["All", "Open", "In Progress", "Resolved"] as const;
 

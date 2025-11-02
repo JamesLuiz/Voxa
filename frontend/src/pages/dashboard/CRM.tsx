@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { listCustomers, createCustomer } from "@/lib/api";
+import { listCustomers, createCustomer } from "@/lib/api.ts";
 
 const CRM = () => {
   const qc = useQueryClient();

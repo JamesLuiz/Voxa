@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, MessageSquare, Ticket, TrendingUp } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { getAnalyticsSummary } from "@/lib/api";
+import { getAnalyticsSummary } from "@/lib/api.ts";
 
 const Overview = () => {
   const businessId = typeof window !== 'undefined' ? localStorage.getItem('voxa_business_id') || undefined : undefined;

@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import voxaLogo from "@/assets/voxa-logo.png";
-import { registerOwnerBusiness } from "@/lib/api";
+import { registerOwnerBusiness } from "@/lib/api.ts";
 import { toast } from "@/components/ui/sonner";
 
 const Register = () => {

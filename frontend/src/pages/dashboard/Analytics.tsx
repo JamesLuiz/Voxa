@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { getAnalyticsSummary } from "@/lib/api";
+import { getAnalyticsSummary } from "@/lib/api.ts";
 
 type AnalyticsSummary = {
   tickets: { open: number; progress: number; resolved: number };
