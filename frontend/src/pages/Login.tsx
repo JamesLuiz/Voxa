@@ -5,7 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/sonner";
 import voxaLogo from "@/assets/voxa-logo.png";
-import { login } from "../lib/api";
+import { login } from "@/lib/api";
 
 const Login = () => {
   const navigate = useNavigate();
