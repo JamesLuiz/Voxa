@@ -7,7 +7,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: ['http://localhost:8080', 'https://voxa-peach.vercel.app/'],
+    origin: ['http://localhost:8080', 'https://voxa-peach.vercel.app'],
     credentials: true,
   });
 
