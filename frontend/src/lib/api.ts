@@ -94,11 +94,20 @@ export async function getLivekitToken(params: { role: "customer" | "owner"; busi
   return (await res.json()) as { token: string; serverUrl: string };
 }
 
-export async function listTickets() {
+export async function listTickets(params?: { status?: "open" | "in-progress" | "resolved" | "closed" }) {
   const token = localStorage.getItem("voxa_token") || "";
-  const res = await fetch(`${API_BASE}/api/tickets`, { headers: { Authorization: `Bearer ${token}` } });
+  const businessId = localStorage.getItem("voxa_business_id") || "";
+  const url = new URL(`${API_BASE}/api/tickets`);
+  if (businessId) url.searchParams.set("businessId", businessId);
+  if (params?.status) url.searchParams.set("status", params.status);
+  const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error("Failed to load tickets");
-  return res.json();
+  const data = await res.json();
+  // Normalize ids for UI components
+  if (Array.isArray(data)) {
+    return data.map((t) => ({ ...t, id: t._id || t.id }));
+  }
+  return data;
 }
 
 // CRM
@@ -133,14 +142,62 @@ export async function upsertCustomer(payload: { businessId: string; name: string
 }
 
 // Tickets
-export async function updateTicketStatus(id: string, status: string) {
+export async function updateTicketStatus(id: string, status: "open" | "in-progress" | "resolved" | "closed") {
   const token = localStorage.getItem("voxa_token") || "";
-  const res = await fetch(`${API_BASE}/api/tickets/${id}`, {
-    method: "PATCH",
+  const res = await fetch(`${API_BASE}/api/tickets/${id}/status`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ status }),
   });
   if (!res.ok) throw new Error("Failed to update ticket");
+  return res.json();
+}
+
+export async function assignTicket(id: string, assignedTo: string) {
+  const token = localStorage.getItem("voxa_token") || "";
+  const res = await fetch(`${API_BASE}/api/tickets/${id}/assign`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ assignedTo }),
+  });
+  if (!res.ok) throw new Error("Failed to assign ticket");
+  return res.json();
+}
+
+export async function addTicketNote(id: string, note: string) {
+  const token = localStorage.getItem("voxa_token") || "";
+  const res = await fetch(`${API_BASE}/api/tickets/${id}/notes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ note }),
+  });
+  if (!res.ok) throw new Error("Failed to add note");
+  return res.json();
+}
+
+export async function getLatestTicket(businessId: string, customerEmail: string) {
+  const url = new URL(`${API_BASE}/api/tickets/latest`);
+  url.searchParams.set('businessId', businessId);
+  url.searchParams.set('customerEmail', customerEmail);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error('Failed to fetch latest ticket');
+  return res.json();
+}
+
+export async function createTicketForEmail(params: { businessId: string; customerEmail: string; title?: string; description?: string; priority?: 'low'|'medium'|'high'|'urgent' }) {
+  const token = localStorage.getItem("voxa_token") || "";
+  const res = await fetch(`${API_BASE}/api/tickets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      businessId: params.businessId,
+      customerEmail: params.customerEmail,
+      title: params.title || 'Support Request',
+      description: params.description || '',
+      priority: params.priority || 'low',
+    })
+  });
+  if (!res.ok) throw new Error("Failed to create ticket");
   return res.json();
 }
 

@@ -90,7 +90,25 @@ const VoiceCall = () => {
 
   return (
     <div className="min-h-[calc(100vh-6rem)] p-3 sm:p-4 md:p-6 flex items-center justify-center">
-      <LiveKitRoom serverUrl={serverUrl} token={token} connect audio video style={{ height: "auto", width: "100%" }}>
+      <LiveKitRoom 
+        key={`room-${Date.now()}-${token?.slice(-10) || 'new'}`}
+        serverUrl={serverUrl} 
+        token={token || ''} 
+        connect 
+        audio 
+        video 
+        style={{ height: "auto", width: "100%" }}
+        onDisconnected={(reason) => {
+          // Handle disconnection - allow reconnection
+          // eslint-disable-next-line no-console
+          console.log('Room disconnected:', reason);
+          sessionStorage.removeItem('voxa_call_active');
+          sessionStorage.removeItem('voxa_pending_text');
+          // Reset token to allow fresh connection
+          setToken(null);
+          setServerUrl(null);
+        }}
+      >
         <PublishPendingText />
         <div className="w-full max-w-4xl glass rounded-xl sm:rounded-2xl p-4 sm:p-6">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0 mb-4 sm:mb-6">

@@ -234,6 +234,7 @@ async def create_ticket(
     """
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        headers = {"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"}
         
         # Try to get business_id from context if not provided
         if not business_id and context:
@@ -255,29 +256,65 @@ async def create_ticket(
         if not business_id:
             return "Error: Business ID is required to create a ticket. Please provide the business context."
         
-        customer_id = None
-        # Try to look up by email + business
-        if customer_email and business_id:
-            lookup_payload = { 'businessId': business_id, 'email': customer_email }
-            look_resp = requests.post(f"{backend_url}/api/crm/customers/upsert", json={ 'businessId': business_id, 'email': customer_email, 'name': customer_name or '' }, timeout=10)
-            if look_resp.ok:
-                customer = look_resp.json()
-                customer_id = customer.get('_id')
+        # Try to get customer email from context if not provided
+        if not customer_email and context:
+            try:
+                if hasattr(context, 'room') and context.room:
+                    room_meta = getattr(context.room, 'metadata', {}) if hasattr(context.room, 'metadata') else {}
+                    if isinstance(room_meta, str):
+                        import json as _json
+                        try:
+                            room_meta = _json.loads(room_meta)
+                        except:
+                            room_meta = {}
+                    if isinstance(room_meta, dict) and room_meta.get('email'):
+                        customer_email = room_meta.get('email')
+            except Exception:
+                pass
+        
+        if not customer_email:
+            return "Error: Customer email is required to create a ticket."
+        
+        # Create or update customer record using email
+        customer_data = {
+            'businessId': business_id,
+            'email': customer_email
+        }
+        
+        if customer_name:
+            customer_data['name'] = customer_name
+        if customer_phone:
+            customer_data['phone'] = customer_phone
+            
+        # Upsert customer to ensure we have a record
+        customer_resp = requests.post(
+            f"{backend_url}/api/crm/customers/upsert", 
+            json=customer_data, 
+            headers=headers, 
+            timeout=10
+        )
+        
+        if not customer_resp.ok:
+            logger.warning(f"Failed to upsert customer: {customer_resp.status_code} {customer_resp.text}")
+            return "Failed to create ticket: Could not process customer information."
+        
+        # Create ticket with customer email directly
         ticket_data = {
             "title": title,
             "description": description,
             "priority": priority,
             "status": "open",
             "businessId": business_id,
-            "customerId": customer_id,
+            "customerEmail": customer_email  # Use email instead of ID
         }
-        headers = {"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"}
+        
         response = requests.post(
             f"{backend_url}/api/tickets",
             json=ticket_data,
             headers=headers,
             timeout=10
         )
+        
         if response.status_code in (200, 201):
             ticket = response.json()
             logger.debug(f"Created ticket: {ticket.get('_id')}")
@@ -347,15 +384,105 @@ async def get_business_context(context: RunContext, business_id: str) -> str:
         api_key = os.getenv('BACKEND_API_KEY', '')
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        resp = requests.get(f"{backend_url}/api/business/context/{business_id}", headers=headers, timeout=10)
-        if resp.status_code == 200:
+
+        # First try to get by ID/context endpoint
+        try:
+            resp = requests.get(f"{backend_url}/api/business/context/{business_id}", headers=headers, timeout=10)
+        except Exception as e:
+            logger.debug(f"Context fetch by ID failed fast: {e}")
+            resp = None
+
+        # If not found or not OK, try by slug endpoint
+        if not resp or resp.status_code != 200:
+            logger.debug(f"Business not found by ID or service error, trying slug: {business_id}")
+            try:
+                resp_slug = requests.get(f"{backend_url}/api/business/by-slug/{business_id}", headers=headers, timeout=10)
+            except Exception as e:
+                logger.debug(f"Business slug lookup failed: {e}")
+                resp_slug = None
+
+            if resp_slug and resp_slug.status_code == 200:
+                business_data = resp_slug.json()
+                # Endpoint returns { businessId, name, slug }
+                resolved_id = business_data.get('businessId') or business_data.get('_id')
+                if resolved_id:
+                    try:
+                        resp = requests.get(f"{backend_url}/api/business/context/{resolved_id}", headers=headers, timeout=10)
+                    except Exception as e:
+                        logger.debug(f"Context fetch by resolved ID failed: {e}")
+
+        if resp and resp.status_code == 200:
             # Return as JSON string for parsing
             import json as _json
             return _json.dumps(resp.json())
+
+        # Return empty dict string when not found (caller expects JSON string)
+        logger.warning(f"Failed to fetch business context (status): {getattr(resp, 'status_code', 'no-response')}")
         return "{}"
     except Exception as e:
         logger.warning(f"Error fetching business context: {e}")
         return "{}"
+
+
+@function_tool()
+async def get_owner_profile(context: RunContext, identifier: str) -> str:
+    """Fetch owner profile. `identifier` may be a businessId, business slug, or owner email.
+    Prefers business context (exposes owner), then owner endpoints by id/slug. Returns JSON string.
+    """
+    try:
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        headers = {}
+        api_key = os.getenv('BACKEND_API_KEY', '')
+        if api_key:
+            headers['Authorization'] = f"Bearer {api_key}"
+
+        import json as _json
+
+        # Try business context first (by id). It now includes owner info.
+        try:
+            resp_ctx = requests.get(f"{backend_url}/api/business/context/{identifier}", headers=headers, timeout=10)
+            if resp_ctx and resp_ctx.status_code == 200:
+                data = resp_ctx.json()
+                owner = data.get('owner')
+                if owner:
+                    return _json.dumps(owner)
+        except Exception:
+            pass
+
+        # Try business owner endpoint by id
+        try:
+            resp = requests.get(f"{backend_url}/api/business/{identifier}/owner", headers=headers, timeout=10)
+            if resp and resp.status_code == 200:
+                return _json.dumps(resp.json())
+        except Exception:
+            pass
+
+        # Try slug-based owner lookup
+        try:
+            resp = requests.get(f"{backend_url}/api/business/by-slug/{identifier}/owner", headers=headers, timeout=10)
+            if resp and resp.status_code == 200:
+                return _json.dumps(resp.json())
+        except Exception:
+            pass
+
+        return "{}"
+    except Exception as e:
+        logger.warning(f"get_owner_profile error: {e}")
+        return "{}"
+
+@function_tool()
+async def list_tickets(context: RunContext, business_id: str, status: Optional[str] = None) -> str:
+    """List tickets for a business. Optional status filter: open|in-progress|resolved|closed"""
+    try:
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        params = {"businessId": business_id}
+        if status:
+            params["status"] = status
+        r = requests.get(f"{backend_url}/api/tickets", params=params, timeout=10)
+        return r.text
+    except Exception as e:
+        logger.warning(f"list_tickets error: {e}")
+        return "[]"
 
 @function_tool()
 async def manage_customer(context: RunContext, action: str, data: dict) -> str:

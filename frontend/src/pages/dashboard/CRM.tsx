@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { listCustomers, createCustomer } from "@/lib/api.ts";
+import { listCustomers, createCustomer, getAnalyticsSummary } from "@/lib/api.ts";
 
 const CRM = () => {
   const qc = useQueryClient();
@@ -14,6 +14,9 @@ const CRM = () => {
     queryKey: ["customers", q],
     queryFn: () => listCustomers(q ? { q } : undefined),
   });
+
+  const businessId = typeof window !== 'undefined' ? localStorage.getItem('voxa_business_id') || undefined : undefined;
+  const { data: analytics } = useQuery({ queryKey: ['crm-analytics', businessId], queryFn: () => getAnalyticsSummary(businessId) });
 
   const mutation = useMutation({
     mutationFn: () => createCustomer({ name: newCustomer.name, email: newCustomer.email, phone: newCustomer.phone }),
@@ -59,6 +62,14 @@ const CRM = () => {
             Add
           </Button>
         </div>
+      </div>
+
+      {/* Inline analytics */}
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+        <Card className="glass"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Customers</div><div className="text-lg font-semibold">{analytics?.customers?.total ?? 0}</div></CardContent></Card>
+        <Card className="glass"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Open Tickets</div><div className="text-lg font-semibold">{analytics?.tickets?.open ?? 0}</div></CardContent></Card>
+        <Card className="glass"><CardContent className="p-3"><div className="text-xs text-muted-foreground">In Progress</div><div className="text-lg font-semibold">{analytics?.tickets?.progress ?? 0}</div></CardContent></Card>
+        <Card className="glass"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Resolved</div><div className="text-lg font-semibold">{analytics?.tickets?.resolved ?? 0}</div></CardContent></Card>
       </div>
 
       {isLoading ? (

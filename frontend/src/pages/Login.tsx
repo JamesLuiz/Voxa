@@ -20,6 +20,11 @@ const Login = () => {
       const res = await login({ email, password });
       localStorage.setItem("voxa_token", res.token || "");
       if (res.businessId) localStorage.setItem("voxa_business_id", res.businessId);
+      // Store owner email if available for "My" filters
+      try {
+        const parsed: any = res as any;
+        if (parsed?.user?.email) localStorage.setItem("voxa_owner_email", String(parsed.user.email));
+      } catch (_) {}
       toast.success("Logged in");
       navigate("/dashboard");
     } catch (err: unknown) {

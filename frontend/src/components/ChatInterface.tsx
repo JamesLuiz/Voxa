@@ -19,16 +19,7 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfaceProps) => {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: "1",
-      role: "assistant",
-      content: mode === "owner" 
-        ? "Hello! I'm your Voxa AI assistant. How can I help you manage your business today?"
-        : `Hi! I'm the AI assistant for ${businessName || "this business"}. How can I help you today?`,
-      timestamp: new Date(),
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -37,6 +28,27 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Listen for agent messages from LiveKit
+  useEffect(() => {
+    const handleAgentMessage = (event: CustomEvent) => {
+      const text = event.detail;
+      if (text && typeof text === 'string') {
+        const aiMessage: Message = {
+          id: Date.now().toString(),
+          role: "assistant",
+          content: text,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, aiMessage]);
+      }
+    };
+
+    window.addEventListener('voxa-agent-message', handleAgentMessage as EventListener);
+    return () => {
+      window.removeEventListener('voxa-agent-message', handleAgentMessage as EventListener);
+    };
+  }, []);
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -56,30 +68,35 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
       // For owner mode we do NOT auto-start the voice session when sending text.
       // Owners can use the voice recording button to open voice. We still call onStartVoice
       // when recording is toggled elsewhere.
-      // If a call is active, send text via LiveKit data channel
+      // If a call is active, send text via LiveKit data channel directly
       const isCallActive = sessionStorage.getItem('voxa_call_active');
       if (isCallActive) {
-        // Store in sessionStorage for PublishPendingText to send
+        // Store in sessionStorage for PublishPendingText to send immediately
         sessionStorage.setItem('voxa_pending_text', JSON.stringify({
           type: 'text_message',
           text: messageText
         }));
-        // Trigger publish
+        // Trigger publish immediately via custom event (works in same window)
         sessionStorage.setItem('voxa_publish_trigger', Date.now().toString());
+        window.dispatchEvent(new CustomEvent('voxa-publish-text', {
+          detail: { timestamp: Date.now() }
+        }));
+        // Don't call onSend for active calls - agent will respond via voice/text in real-time
+        return;
       }
       
-      if (onSend) {
+      // Only call onSend if call is not active (fallback)
+      if (onSend && !isCallActive) {
         const result = await onSend(messageText);
-        let reply = typeof result === "string" && result ? result : "Error: No response from agent.";
-        const aiMessage: Message = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content: reply,
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, aiMessage]);
-      } else {
-        // Optionally, handle case when onSend is not provided
+        if (result) {
+          const aiMessage: Message = {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: result,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, aiMessage]);
+        }
       }
     } finally {
       setIsTyping(false);

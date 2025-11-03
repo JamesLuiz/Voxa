@@ -16,7 +16,7 @@ export class BusinessController {
       biz = await this.businessModel.findOne({ name: { $regex: new RegExp(`^${norm}$`, 'i') } }).lean();
     }
     if (!biz) return {};
-    return { businessId: String(biz._id), name: biz.name };
+    return { businessId: String(biz._id), name: biz.name, slug: biz.slug };
   }
 
   @Get('resolve')
@@ -50,7 +50,31 @@ export class BusinessController {
       products: biz.products || [],
       policies: biz.policies || '',
       agentConfig: biz.agentConfig || {},
+      owner: biz.owner ? { name: biz.owner.name, email: biz.owner.email } : undefined,
+      slug: biz.slug,
     };
+  }
+
+  // New: Get owner info by business id
+  @Get(':businessId/owner')
+  async getOwnerByBusinessId(@Param('businessId') businessId: string) {
+    try {
+      const _id = new Types.ObjectId(businessId);
+      const biz = await this.businessModel.findById(_id, { owner: 1 }).lean();
+      if (!biz || !biz.owner) return {};
+      return { name: biz.owner.name, email: biz.owner.email };
+    } catch {
+      return {};
+    }
+  }
+
+  // New: Get owner info by business slug
+  @Get('by-slug/:slug/owner')
+  async getOwnerBySlug(@Param('slug') slug: string) {
+    const norm = String(slug).trim().toLowerCase();
+    const biz = await this.businessModel.findOne({ slug: norm }, { owner: 1 }).lean();
+    if (!biz || !biz.owner) return {};
+    return { name: biz.owner.name, email: biz.owner.email };
   }
 
   @Put(':id')

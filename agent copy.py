@@ -21,7 +21,6 @@ from tools import (
     manage_customer,
     update_ticket,
     get_analytics,
-    list_tickets,
 )
 
 # ------------------ SETUP ------------------
@@ -145,7 +144,6 @@ class Assistant(Agent):
                 manage_customer,
                 update_ticket,
                 get_analytics,
-                list_tickets,
             ],
         )
     
@@ -292,34 +290,15 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
     
     # Upsert customer to CRM
     import json as _json
-    # Upsert customer to CRM. Use the provided run context so the tool
-    # can extract businessId from the room metadata if needed.
-    # Note: manage_customer is a function_tool and should be awaited directly.
-    customer_result = None
+    customer_result = await manage_customer.run(None, "upsert", {
+        'businessId': business_id, 
+        'name': collected['name'], 
+        'email': collected['email'], 
+        'phone': collected['phone']
+    })
+    
     try:
-        customer_result = await manage_customer(ctx, 'upsert', {
-            'businessId': business_id,
-            'name': collected['name'],
-            'email': collected['email'],
-            'phone': collected['phone']
-        })
-    except Exception as e:
-        logger.warning(f"manage_customer upsert call failed: {e}")
-
-    # Parse the result robustly: the tool returns either a JSON string or a dict
-    cust = None
-    try:
-        if not customer_result:
-            cust = None
-        elif isinstance(customer_result, str):
-            try:
-                cust = _json.loads(customer_result)
-            except Exception:
-                # Some backends return plain text - fall back to empty
-                cust = None
-        elif isinstance(customer_result, dict):
-            cust = customer_result
-
+        cust = _json.loads(customer_result) if customer_result else None
         if not cust or not cust.get('_id'):
             try:
                 await asyncio.wait_for(
@@ -399,9 +378,9 @@ async def entrypoint(ctx: agents.JobContext):
                 if hasattr(mock_ctx, 'room'):
                     try:
                         mock_ctx.room = ctx.room
-                    except Exception:
+                    except:
                         pass
-
+                
                 business_context_result = await get_business_context(mock_ctx, business_id)
                 if business_context_result:
                     import json as _json
@@ -411,135 +390,133 @@ async def entrypoint(ctx: agents.JobContext):
                         business_context = {}
             except Exception as e:
                 logger.warning(f"Failed to fetch business context: {e}")
-    except Exception as e:
-        logger.debug(f"Error preparing metadata/business context: {e}")
 
-    # 3. Format the agent instruction with business context
-    is_owner = (user_role == 'owner')
-    agent_config = business_context.get('agentConfig', {}) if isinstance(business_context, dict) else {}
-
-    # Evaluate mode first to avoid format string issues
-    mode_value = 'OWNER' if is_owner else 'CUSTOMER'
-
-    # Convert business_hours dict to string if needed
-    business_hours_config = agent_config.get('businessHours', {}) if isinstance(agent_config, dict) else {}
-    if isinstance(business_hours_config, dict):
-        business_hours_str = ', '.join([f"{k}: {v}" for k, v in business_hours_config.items()]) if business_hours_config else '9-5'
-    else:
-        business_hours_str = str(business_hours_config) if business_hours_config else '9-5'
-
-    formatted_instruction = AGENT_INSTRUCTION.format(
-        business_name=business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business',
-        business_description=business_context.get('description', '') if isinstance(business_context, dict) else '',
-        products_list=', '.join(business_context.get('products', [])) if isinstance(business_context, dict) and isinstance(business_context.get('products'), list) else '',
-        business_policies=business_context.get('policies', '') if isinstance(business_context, dict) else '',
-        mode=mode_value,
-        agent_tone=agent_config.get('tone', 'professional') if isinstance(agent_config, dict) else 'professional',
-        response_style=agent_config.get('responseStyle', 'concise') if isinstance(agent_config, dict) else 'concise',
-        business_hours_str=business_hours_str,
-        custom_prompt=agent_config.get('customPrompt', '') if isinstance(agent_config, dict) else ''
-    )
-
-    # 4. Create the session
-    session = AgentSession()
-
-    # 5. Start the session with room, agent, and input options (CRITICAL ORDER)
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(instructions=formatted_instruction),
-        room_input_options=RoomInputOptions(
-            video_enabled=True,
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
-
-    # 6. Connect to the room (IMPORTANT - this was missing!)
-    await ctx.connect()
+        # 3. Format the agent instruction with business context
+        is_owner = (user_role == 'owner')
+        agent_config = business_context.get('agentConfig', {}) if isinstance(business_context, dict) else {}
         
-    # 7. Setup timeout state for monitoring (must be before data handler)
-    # Timeout state removed - no longer monitoring timeouts
+        # Evaluate mode first to avoid format string issues
+        mode_value = 'OWNER' if is_owner else 'CUSTOMER'
+        
+        # Convert business_hours dict to string if needed
+        business_hours_config = agent_config.get('businessHours', {}) if isinstance(agent_config, dict) else {}
+        if isinstance(business_hours_config, dict):
+            business_hours_str = ', '.join([f"{k}: {v}" for k, v in business_hours_config.items()]) if business_hours_config else '9-5'
+        else:
+            business_hours_str = str(business_hours_config) if business_hours_config else '9-5'
+        
+        formatted_instruction = AGENT_INSTRUCTION.format(
+            business_name=business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business',
+            business_description=business_context.get('description', '') if isinstance(business_context, dict) else '',
+            products_list=', '.join(business_context.get('products', [])) if isinstance(business_context, dict) and isinstance(business_context.get('products'), list) else '',
+            business_policies=business_context.get('policies', '') if isinstance(business_context, dict) else '',
+            mode=mode_value,
+            agent_tone=agent_config.get('tone', 'professional') if isinstance(agent_config, dict) else 'professional',
+            response_style=agent_config.get('responseStyle', 'concise') if isinstance(agent_config, dict) else 'concise',
+            business_hours_str=business_hours_str,
+            custom_prompt=agent_config.get('customPrompt', '') if isinstance(agent_config, dict) else ''
+        )
 
-    # 8. Setup data handler for incoming messages
-    async def _handle_incoming_data(payload, participant=None):
-        try:
-            text = None
-            raw = None
-
-            if isinstance(payload, (bytes, bytearray)):
-                try:
-                    raw = payload.decode('utf-8')
-                except Exception:
-                    raw = None
-            elif isinstance(payload, str):
-                raw = payload
-            elif hasattr(payload, 'data'):
-                try:
-                    raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
-                except Exception:
-                    raw = None
-
-            if raw:
-                import json as _json
-                try:
-                    obj = _json.loads(raw)
-                except Exception:
-                    # If not JSON, treat raw string as text message
-                    text = raw if isinstance(raw, str) else str(raw)
-                    obj = None
-
-                if obj:
-                    if obj.get('type') == 'text_message' and obj.get('text'):
-                        text = obj.get('text')
-                    elif obj.get('text'):
-                        # Also handle plain text in object
-                        text = obj.get('text')
-                elif not text and raw:
-                    # Raw string as fallback
-                    text = raw
-
-            if not text:
-                return
-
-            # Update room-scoped history
+        # 4. Create the session
+        session = AgentSession()
+        
+        # 5. Start the session with room, agent, and input options (CRITICAL ORDER)
+        await session.start(
+            room=ctx.room,
+            agent=Assistant(instructions=formatted_instruction),
+            room_input_options=RoomInputOptions(
+                video_enabled=True,
+                noise_cancellation=noise_cancellation.BVC(),
+            ),
+        )
+        
+        # 6. Connect to the room (IMPORTANT - this was missing!)
+        await ctx.connect()
+        
+        # 7. Setup timeout state for monitoring (must be before data handler)
+        # Timeout state removed - no longer monitoring timeouts
+        
+        # 8. Setup data handler for incoming messages
+        async def _handle_incoming_data(payload, participant=None):
             try:
-                rname = getattr(ctx.room, 'name', None)
-            except Exception:
-                rname = None
-            if rname:
-                update_history(rname, 'user', text)
+                text = None
+                raw = None
+                
+                if isinstance(payload, (bytes, bytearray)):
+                    try:
+                        raw = payload.decode('utf-8')
+                    except Exception:
+                        raw = None
+                elif isinstance(payload, str):
+                    raw = payload
+                elif hasattr(payload, 'data'):
+                    try:
+                        raw = payload.data.decode('utf-8') if isinstance(payload.data, (bytes, bytearray)) else str(payload.data)
+                    except Exception:
+                        raw = None
 
-            # Generate spoken reply with timeout handling
-            try:
-                # Wrap in timeout to handle LiveKit agent timeout errors gracefully
-                await asyncio.wait_for(
-                    session.generate_reply(instructions=text),
-                    timeout=30.0  # 30 second timeout for reply generation
-                )
-
-                # Send text response back via data channel so frontend can display it
-                try:
+                if raw:
                     import json as _json
-                    response_data = _json.dumps({
-                        'type': 'agent_response',
-                        'text': text  # The agent's response will be in the transcription/response
-                    })
-                    # Try to send via room data channel
-                    if hasattr(ctx.room, 'local_participant'):
-                        try:
-                            await ctx.room.local_participant.publish_data(
-                                response_data.encode('utf-8'),
-                                reliable=True
-                            )
-                        except:
-                            pass
-                except Exception:
-                    pass  # Don't fail if we can't send text response
-            except Exception:
-                logger.exception('Failed to generate reply from data message')
-        except Exception:
-            logger.exception('Unhandled error in data message handler')
+                    try:
+                        obj = _json.loads(raw)
+                    except Exception:
+                        # If not JSON, treat raw string as text message
+                        text = raw if isinstance(raw, str) else str(raw)
+                        obj = None
 
-    # 6. Attach data handler for text messages
+                    if obj:
+                        if obj.get('type') == 'text_message' and obj.get('text'):
+                            text = obj.get('text')
+                        elif obj.get('text'):
+                            # Also handle plain text in object
+                            text = obj.get('text')
+                    elif not text and raw:
+                        # Raw string as fallback
+                        text = raw
+
+                if not text:
+                    return
+
+                # Update room-scoped history
+                try:
+                    rname = getattr(ctx.room, 'name', None)
+                except Exception:
+                    rname = None
+                if rname:
+                    update_history(rname, 'user', text)
+
+                # Generate spoken reply with timeout handling
+                try:
+                    # Wrap in timeout to handle LiveKit agent timeout errors gracefully
+                    await asyncio.wait_for(
+                        session.generate_reply(instructions=text),
+                        timeout=30.0  # 30 second timeout for reply generation
+                    )
+                    
+                    # Send text response back via data channel so frontend can display it
+                    try:
+                        import json as _json
+                        response_data = _json.dumps({
+                            'type': 'agent_response',
+                            'text': text  # The agent's response will be in the transcription/response
+                        })
+                        # Try to send via room data channel
+                        if hasattr(ctx.room, 'local_participant'):
+                            try:
+                                await ctx.room.local_participant.publish_data(
+                                    response_data.encode('utf-8'),
+                                    reliable=True
+                                )
+                            except:
+                                pass
+                    except Exception:
+                        pass  # Don't fail if we can't send text response
+                except Exception:
+                    logger.exception('Failed to generate reply from data message')
+            except Exception:
+                logger.exception('Unhandled error in data message handler')
+        
+        # 6. Attach data handler for text messages
         # According to LiveKit docs, agents receive text via lk.chat topic
         # We need to listen to participant data events
         async def _handle_participant_data(message, participant=None):
@@ -787,115 +764,12 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as e:
             logger.debug(f"Could not setup session text handler: {e}")
         
-        # If owner, attempt to fetch owner details from business_context
-        owner_info = {}
-        if is_owner:
-            # Prefer owner info embedded in business_context if present
-            if isinstance(business_context, dict):
-                owner_info = business_context.get('owner') or business_context.get('ownerInfo') or {}
-            else:
-                owner_info = {}
-            # If owner_info is empty, we'll try metadata or business id below
-            # business_context may include owner metadata
-            # If owner_info is just an email or id, try to resolve via backend tool
-            try:
-                # Prefer to resolve full owner profile via tools.get_owner_profile
-                from tools import get_owner_profile
-                resolved = None
-                # If business_context has owner email or id, try that first
-                candidate = None
-                if isinstance(owner_info, dict):
-                    candidate = owner_info.get('email') or owner_info.get('id') or owner_info.get('_id')
-                elif isinstance(owner_info, str):
-                    candidate = owner_info
-
-                # If we have a candidate (email or id/slug), try resolving
-                if candidate:
-                    try:
-                        res = await get_owner_profile(mock_ctx, candidate)
-                        import json as _json
-                        if res:
-                            try:
-                                parsed = _json.loads(res) if isinstance(res, str) else res
-                                if isinstance(parsed, dict) and parsed:
-                                    resolved = parsed
-                                elif isinstance(parsed, list) and parsed:
-                                    resolved = parsed[0]
-                            except Exception:
-                                resolved = None
-                    except Exception:
-                        resolved = None
-
-                # If resolution succeeded, use it; otherwise keep owner_info as-is
-                if resolved:
-                    owner_info = resolved
-                else:
-                    # If owner_info is an email string, normalize to dict
-                    if isinstance(owner_info, str) and '@' in owner_info:
-                        owner_info = {'email': owner_info}
-            except Exception:
-                owner_info = owner_info or {}
-
-            # If we still don't have owner_info, try metadata or business_id
-            try:
-                if (not owner_info or (isinstance(owner_info, dict) and not owner_info.get('email') and not owner_info.get('name'))):
-                    md = metadata or {}
-                    candidate = None
-                    # Common metadata fields used by frontends
-                    candidate = md.get('ownerEmail') or md.get('email') or md.get('owner') or None
-                    if not candidate and business_id:
-                        candidate = business_id
-                    if candidate:
-                        try:
-                            res = await get_owner_profile(mock_ctx, candidate)
-                            import json as _json
-                            parsed = _json.loads(res) if isinstance(res, str) else res
-                            if isinstance(parsed, dict) and parsed:
-                                owner_info = parsed
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-
         # 9. Generate initial welcome message (session is now running)
         try:
             # Use different instruction based on role
             welcome_msg = SESSION_INSTRUCTION
             if is_owner:
-                owner_name = owner_info.get('name') if isinstance(owner_info, dict) else None
-                if not owner_name:
-                    # Try to extract from metadata if available
-                    try:
-                        md = metadata or {}
-                        owner_name = md.get('ownerName') or md.get('owner') or None
-                    except Exception:
-                        owner_name = None
-
-                if owner_name:
-                    welcome_msg = f"Hi {owner_name}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
-                else:
-                    welcome_msg = "Hello! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. How can I assist you today?"
-            else:
-                # Customer-facing quick friendly intro using business name if available
-                try:
-                    biz_name = business_context.get('name') if isinstance(business_context, dict) else None
-                except Exception:
-                    biz_name = None
-                if biz_name:
-                    welcome_msg = f"Hi there! I'm Voxa, your AI assistant for {biz_name}. I'm here to help — can I get your name to get started?"
-                else:
-                    welcome_msg = "Hi there! I'm Voxa, your AI assistant. I'm here to help — can I get your name to get started?"
-
-                # If we are in owner mode but didn't find a proper name, try email local-part as friendly fallback
-                if is_owner and (not owner_name or owner_name.strip() == ''):
-                    try:
-                        if isinstance(owner_info, dict) and owner_info.get('email'):
-                            owner_email = owner_info.get('email')
-                            local = owner_email.split('@', 1)[0]
-                            if local:
-                                welcome_msg = f"Hi {local}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
-                    except Exception:
-                        pass
+                welcome_msg = "Hello! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. How can I assist you today?"
             
             # Wrap in timeout to handle LiveKit agent timeout errors gracefully
             try:
@@ -982,15 +856,15 @@ async def entrypoint(ctx: agents.JobContext):
         except asyncio.CancelledError:
             logger.debug("Entrypoint cancelled")
         
-        except Exception as e:
-            try:
-                room_name = getattr(ctx.room, 'name', 'unknown')
-            except Exception:
-                room_name = 'unknown'
-            logger.exception(f"Unhandled exception in entrypoint for room {room_name}: {e}")
-        finally:
-            # Cleanup happens automatically when the function exits
-            pass
+    except Exception as e:
+        try:
+            room_name = getattr(ctx.room, 'name', 'unknown')
+        except Exception:
+            room_name = 'unknown'
+        logger.exception(f"Unhandled exception in entrypoint for room {room_name}: {e}")
+    finally:
+        # Cleanup happens automatically when the function exits
+        pass
 
 
 if __name__ == "__main__":
