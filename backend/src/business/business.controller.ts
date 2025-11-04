@@ -1,8 +1,11 @@
 import { Body, Controller, Get, Param, Put, Req } from '@nestjs/common';
+import { UpdateBusinessDto } from '../dto/business.dto';
+import { ApiTags } from '@nestjs/swagger';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Business, BusinessDocument } from '../schemas/business.schema';
 
+@ApiTags('Business')
 @Controller('api/business')
 export class BusinessController {
   constructor(@InjectModel(Business.name) private businessModel: Model<BusinessDocument>) {}
@@ -16,7 +19,16 @@ export class BusinessController {
       biz = await this.businessModel.findOne({ name: { $regex: new RegExp(`^${norm}$`, 'i') } }).lean();
     }
     if (!biz) return {};
-    return { businessId: String(biz._id), name: biz.name, slug: biz.slug };
+    return {
+      businessId: String(biz._id),
+      name: biz.name,
+      slug: biz.slug,
+      description: biz.description || '',
+      products: biz.products || [],
+      policies: biz.policies || '',
+      owner: biz.owner ? { name: biz.owner.name, email: biz.owner.email } : undefined,
+      agentConfig: biz.agentConfig || {},
+    };
   }
 
   @Get('resolve')
@@ -72,15 +84,22 @@ export class BusinessController {
   @Get('by-slug/:slug/owner')
   async getOwnerBySlug(@Param('slug') slug: string) {
     const norm = String(slug).trim().toLowerCase();
-    const biz = await this.businessModel.findOne({ slug: norm }, { owner: 1 }).lean();
-    if (!biz || !biz.owner) return {};
-    return { name: biz.owner.name, email: biz.owner.email };
+    const biz = await this.businessModel.findOne({ slug: norm }).lean();
+    if (!biz) return {};
+    return {
+      businessId: String(biz._id),
+      name: biz.name,
+      slug: biz.slug,
+      owner: biz.owner ? { name: biz.owner.name, email: biz.owner.email } : undefined,
+      description: biz.description || '',
+      products: biz.products || [],
+    };
   }
 
   @Put(':id')
   async updateBusiness(
     @Param('id') id: string,
-    @Body() body: { description?: string; products?: string[]; policies?: string },
+    @Body() body: UpdateBusinessDto,
   ) {
     const _id = new Types.ObjectId(id);
     const update: any = {};

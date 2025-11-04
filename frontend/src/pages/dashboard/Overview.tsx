@@ -2,9 +2,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, MessageSquare, Ticket, TrendingUp } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { getAnalyticsSummary } from "@/lib/api.ts";
+import { useEffect, useState } from "react";
 
 const Overview = () => {
   const businessId = typeof window !== 'undefined' ? localStorage.getItem('voxa_business_id') || undefined : undefined;
+  const [ownerName, setOwnerName] = useState<string>("");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const apiBase = (import.meta as any).env.VITE_API_URL;
+        if (businessId) {
+          const res = await fetch(`${apiBase}/api/business/${businessId}/owner`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.name) setOwnerName(String(data.name));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+  }, [businessId]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['analytics', businessId],
@@ -23,10 +42,10 @@ const Overview = () => {
     <div className="space-y-6 sm:space-y-8 animate-fade-in px-4 sm:px-0">
       <div>
         <h1 className="text-2xl sm:text-3xl lg:text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
-          Dashboard Overview
+          {ownerName ? `Welcome, ${ownerName}` : 'Dashboard Overview'}
         </h1>
         <p className="text-muted-foreground mt-2 text-sm sm:text-base">
-          Welcome back! Here's what's happening with your business.
+          {ownerName ? "Here's what's happening with your business." : "Welcome back! Here's what's happening with your business."}
         </p>
       </div>
 

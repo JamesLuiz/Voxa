@@ -44,30 +44,45 @@ const Login = () => {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-background">
-      <div className="w-full max-w-md">
-        <div className="text-center mb-6">
-          <img src={voxaLogo} alt="Voxa" className="w-12 h-12 mx-auto mb-3" />
-          <h1 className="text-2xl font-bold">Welcome back</h1>
-          <p className="text-sm text-muted-foreground mt-1">Sign in to access your dashboard</p>
+      <div className="w-full max-w-md animate-fade-in">
+        <div className="text-center mb-8">
+          <img src={voxaLogo} alt="Voxa" className="w-16 h-16 mx-auto mb-4 animate-glow-pulse" />
+          <h1 className="text-3xl font-bold gradient-text mb-2">Welcome back</h1>
+          <p className="text-sm text-muted-foreground">Sign in to access your AI dashboard</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="glass rounded-lg p-6 shadow">
+        <form onSubmit={handleSubmit} className="glass rounded-2xl p-8 shadow-lg border-2 border-primary/20 space-y-6">
           <div className="space-y-4">
-            <div>
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            <div className="space-y-2">
+              <Label htmlFor="email" className="text-sm font-medium">Email</Label>
+              <Input 
+                id="email" 
+                value={email} 
+                onChange={(e) => setEmail(e.target.value)} 
+                placeholder="you@example.com"
+                className="h-11 bg-muted/50 border-primary/20 focus:border-primary/40 transition-all" 
+              />
             </div>
-            <div>
-              <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Your password" />
+            <div className="space-y-2">
+              <Label htmlFor="password" className="text-sm font-medium">Password</Label>
+              <Input 
+                id="password" 
+                type="password" 
+                value={password} 
+                onChange={(e) => setPassword(e.target.value)} 
+                placeholder="Your password"
+                className="h-11 bg-muted/50 border-primary/20 focus:border-primary/40 transition-all" 
+              />
             </div>
-            <div className="flex justify-between items-center">
-              <Button type="submit" disabled={loading} className="w-full">
-                {loading ? "Signing in..." : "Sign in"}
-              </Button>
-            </div>
-            <div className="text-center text-sm text-muted-foreground mt-3">
-              Don't have an account? <button type="button" className="underline" onClick={() => navigate('/register')}>Sign up</button>
+            <Button 
+              type="submit" 
+              disabled={loading} 
+              className="w-full h-12 text-base font-semibold neon-glow hover:scale-[1.02] transition-all"
+            >
+              {loading ? "Signing in..." : "Sign in"}
+            </Button>
+            <div className="text-center text-sm text-muted-foreground pt-2">
+              Don't have an account? <button type="button" className="text-primary hover:text-primary-glow underline transition-colors" onClick={() => navigate('/register')}>Sign up</button>
             </div>
           </div>
         </form>

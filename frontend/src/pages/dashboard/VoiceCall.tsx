@@ -91,7 +91,7 @@ const VoiceCall = () => {
   return (
     <div className="min-h-[calc(100vh-6rem)] p-3 sm:p-4 md:p-6 flex items-center justify-center">
       <LiveKitRoom 
-        key={`room-${Date.now()}-${token?.slice(-10) || 'new'}`}
+        key={`room-${token?.slice(-10) || 'new'}`}
         serverUrl={serverUrl} 
         token={token || ''} 
         connect 

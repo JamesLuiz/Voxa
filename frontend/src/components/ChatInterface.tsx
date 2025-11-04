@@ -112,36 +112,37 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
   };
 
   return (
-    <div className="flex flex-col h-full glass rounded-xl sm:rounded-2xl overflow-hidden">
+    <div className="flex flex-col h-full glass rounded-xl sm:rounded-2xl overflow-hidden border-2 border-primary/20">
       {/* Chat messages */}
       <ScrollArea className="flex-1 p-3 sm:p-4 md:p-6">
         <div className="space-y-3 sm:space-y-4">
-          {messages.map((message) => (
+          {messages.map((message, index) => (
             <div
               key={message.id}
               className={`flex ${message.role === "user" ? "justify-end" : "justify-start"} animate-fade-in`}
+              style={{ animationDelay: `${index * 0.05}s` }}
             >
               <div
-                className={`max-w-[85%] sm:max-w-[80%] p-3 sm:p-4 rounded-xl sm:rounded-2xl ${
+                className={`max-w-[85%] sm:max-w-[80%] p-3 sm:p-4 rounded-2xl sm:rounded-3xl transition-all duration-300 hover:scale-[1.02] ${
                   message.role === "user"
-                    ? "bg-gradient-to-r from-primary to-accent text-white"
-                    : "bg-muted/50"
+                    ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg neon-glow"
+                    : "bg-gradient-to-br from-muted/60 to-muted/40 backdrop-blur-xl border border-primary/10"
                 }`}
               >
-                <p className="text-xs sm:text-sm break-words">{message.content}</p>
-                <span className="text-[10px] sm:text-xs opacity-70 mt-1 sm:mt-2 block">
+                <p className="text-xs sm:text-sm break-words leading-relaxed">{message.content}</p>
+                <span className="text-[10px] sm:text-xs opacity-60 mt-1 sm:mt-2 block">
                   {message.timestamp.toLocaleTimeString()}
                 </span>
               </div>
             </div>
           ))}
           {isTyping && (
-            <div className="flex justify-start">
-              <div className="bg-muted/50 p-3 sm:p-4 rounded-xl sm:rounded-2xl">
-                <div className="flex gap-1.5 sm:gap-2">
-                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+            <div className="flex justify-start animate-fade-in">
+              <div className="bg-gradient-to-br from-muted/60 to-muted/40 backdrop-blur-xl border border-primary/10 p-4 sm:p-5 rounded-2xl sm:rounded-3xl">
+                <div className="flex gap-1.5 sm:gap-2 items-center">
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce shadow-lg shadow-primary/50" style={{ animationDelay: "0ms" }} />
+                  <div className="w-2 h-2 bg-accent rounded-full animate-bounce shadow-lg shadow-accent/50" style={{ animationDelay: "150ms" }} />
+                  <div className="w-2 h-2 bg-primary rounded-full animate-bounce shadow-lg shadow-primary/50" style={{ animationDelay: "300ms" }} />
                 </div>
               </div>
             </div>
@@ -151,33 +152,30 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
       </ScrollArea>
 
       {/* Input area */}
-      <div className="p-3 sm:p-4 md:p-6 border-t border-border">
+      <div className="p-3 sm:p-4 md:p-6 border-t border-primary/20 bg-gradient-to-r from-primary/5 to-accent/5">
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Voice recording button */}
-          {/* <Button
-            size="icon"
-            variant={isRecording ? "default" : "outline"}
-            onClick={toggleRecording}
-            className={`flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10 ${isRecording ? "animate-pulse-glow" : ""}`}
-          >
-            {isRecording ? <MicOff className="w-4 h-4 sm:w-5 sm:h-5" /> : <Mic className="w-4 h-4 sm:w-5 sm:h-5" />}
-          </Button> */}
-
           {/* Text input */}
-          <Input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSend()}
-            placeholder={isRecording ? "Recording..." : "Type a message..."}
-            disabled={isRecording}
-            className="flex-1 text-sm sm:text-base"
-          />
+          <div className="flex-1 relative">
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && handleSend()}
+              placeholder={isRecording ? "Recording..." : "Type your message..."}
+              disabled={isRecording}
+              className="flex-1 text-sm sm:text-base h-11 sm:h-12 bg-muted/50 border-primary/20 focus:border-primary/40 transition-all pr-12 rounded-full"
+            />
+            {input.trim() && (
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                ⏎
+              </div>
+            )}
+          </div>
 
           {/* Send button */}
           <Button 
             onClick={handleSend} 
             disabled={!input.trim() || isRecording}
-            className="flex-shrink-0 w-9 h-9 sm:w-10 sm:h-10"
+            className="flex-shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-full neon-glow transition-all hover:scale-110"
             size="icon"
           >
             <Send className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -186,11 +184,11 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
 
         {/* Recording waveform */}
         {isRecording && (
-          <div className="flex items-center justify-center gap-0.5 sm:gap-1 mt-3 sm:mt-4 h-8 sm:h-12">
+          <div className="flex items-center justify-center gap-1 mt-4 h-10 sm:h-14">
             {[...Array(20)].map((_, i) => (
               <div
                 key={i}
-                className="w-0.5 sm:w-1 bg-primary rounded-full animate-wave"
+                className="w-1 bg-gradient-to-t from-primary to-accent rounded-full animate-wave shadow-lg shadow-primary/50"
                 style={{ 
                   animationDelay: `${i * 50}ms`,
                   height: "100%"

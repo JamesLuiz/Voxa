@@ -6,15 +6,19 @@ import { Business, BusinessSchema } from '../schemas/business.schema';
 import { EmailCredentials, EmailCredentialsSchema } from '../schemas/email-credentials.schema';
 import { EmailCredentialsService } from './email-credentials.service';
 import { EmailCredentialsController } from './email-credentials.controller';
+import { GeneralUser, GeneralUserSchema } from '../schemas/general-user.schema';
+import { GeneralAuthController } from './general.controller';
+import { GeneralConversationController } from './general-conversation.controller';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Business.name, schema: BusinessSchema },
-      { name: EmailCredentials.name, schema: EmailCredentialsSchema }
+      { name: EmailCredentials.name, schema: EmailCredentialsSchema },
+      { name: GeneralUser.name, schema: GeneralUserSchema },
     ])
   ],
-  controllers: [AuthController, EmailCredentialsController],
+  controllers: [AuthController, EmailCredentialsController, GeneralAuthController, GeneralConversationController],
   providers: [AuthService, EmailCredentialsService],
   exports: [EmailCredentialsService]
 })

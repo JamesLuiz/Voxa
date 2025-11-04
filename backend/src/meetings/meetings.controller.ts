@@ -1,14 +1,17 @@
 import { Body, Controller, Delete, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { CreateMeetingDto } from '../dto/meetings.dto';
+import { ApiTags } from '@nestjs/swagger';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Meeting, MeetingDocument } from '../schemas/meeting.schema';
 
+@ApiTags('Meetings')
 @Controller('api/meetings')
 export class MeetingsController {
   constructor(@InjectModel(Meeting.name) private meetingModel: Model<MeetingDocument>) {}
 
   @Post()
-  async create(@Body() body: any) {
+  async create(@Body() body: CreateMeetingDto) {
     const created = await this.meetingModel.create({
       businessId: new Types.ObjectId(body.businessId),
       customerId: new Types.ObjectId(body.customerId),

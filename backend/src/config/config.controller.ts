@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Put } from '@nestjs/common';
+import { AgentConfigDto } from '../dto/business.dto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Business, BusinessDocument } from '../schemas/business.schema';
@@ -17,14 +18,7 @@ export class ConfigController {
   @Put('agent/:businessId')
   async updateAgentConfig(
     @Param('businessId') businessId: string,
-    @Body()
-    body: {
-      tone?: 'professional' | 'casual' | 'friendly';
-      responseStyle?: 'concise' | 'detailed';
-      businessHours?: Record<string, string>;
-      autoEscalate?: boolean;
-      customPrompt?: string;
-    },
+    @Body() body: AgentConfigDto,
   ) {
     const _id = new Types.ObjectId(businessId);
     const updated = await this.businessModel.findByIdAndUpdate(

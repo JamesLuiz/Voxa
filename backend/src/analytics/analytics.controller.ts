@@ -1,10 +1,12 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
+import { ApiTags } from '@nestjs/swagger';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Customer, CustomerDocument } from '../schemas/customer.schema';
 import { Ticket, TicketDocument } from '../schemas/ticket.schema';
 import { Meeting, MeetingDocument } from '../schemas/meeting.schema';
 
+@ApiTags('Analytics')
 @Controller('api/analytics')
 export class AnalyticsController {
   constructor(

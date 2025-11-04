@@ -120,12 +120,14 @@ export async function listCustomers(params?: { q?: string }) {
   return res.json();
 }
 
-export async function createCustomer(payload: { name: string; email?: string; phone?: string; tags?: string[] }) {
+export async function createCustomer(payload: { businessId?: string; name: string; email?: string; phone?: string; tags?: string[] }) {
   const token = localStorage.getItem("voxa_token") || "";
+  const businessId = localStorage.getItem('voxa_business_id') || '';
+  const body = { businessId, ...payload }; // Keep the existing body structure
   const res = await fetch(`${API_BASE}/api/crm/customers`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error("Failed to create customer");
   return res.json();
@@ -191,7 +193,7 @@ export async function createTicketForEmail(params: { businessId: string; custome
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({
       businessId: params.businessId,
-      customerEmail: params.customerEmail,
+      userEmail: params.customerEmail,
       title: params.title || 'Support Request',
       description: params.description || '',
       priority: params.priority || 'low',
@@ -214,10 +216,20 @@ export async function listMeetings(range?: { from?: string; to?: string }) {
 
 export async function createMeeting(payload: { title: string; startsAt: string; durationMins?: number; with?: string }) {
   const token = localStorage.getItem("voxa_token") || "";
+  // Backend expects startTime and duration (mins). Map frontend payload accordingly.
+  const businessId = localStorage.getItem('voxa_business_id') || '';
+  const body = {
+    businessId,
+    customerId: payload.with || '',
+    title: payload.title,
+    startTime: payload.startsAt,
+    duration: payload.durationMins || 30,
+  };
+
   const res = await fetch(`${API_BASE}/api/meetings`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error("Failed to create meeting");
   return res.json();

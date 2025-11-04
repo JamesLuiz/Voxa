@@ -19,7 +19,7 @@ const CRM = () => {
   const { data: analytics } = useQuery({ queryKey: ['crm-analytics', businessId], queryFn: () => getAnalyticsSummary(businessId) });
 
   const mutation = useMutation({
-    mutationFn: () => createCustomer({ name: newCustomer.name, email: newCustomer.email, phone: newCustomer.phone }),
+  mutationFn: () => createCustomer({ name: newCustomer.name, email: newCustomer.email, phone: newCustomer.phone, businessId: businessId || '' }),
     onSuccess: () => {
       setNewCustomer({ name: "", email: "", phone: "" });
       qc.invalidateQueries({ queryKey: ["customers"] });

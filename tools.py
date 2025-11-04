@@ -298,14 +298,14 @@ async def create_ticket(
             logger.warning(f"Failed to upsert customer: {customer_resp.status_code} {customer_resp.text}")
             return "Failed to create ticket: Could not process customer information."
         
-        # Create ticket with customer email directly
+        # Create ticket with customer email directly (backend expects `userEmail`)
         ticket_data = {
             "title": title,
             "description": description,
             "priority": priority,
             "status": "open",
             "businessId": business_id,
-            "customerEmail": customer_email  # Use email instead of ID
+            "userEmail": customer_email
         }
         
         response = requests.post(

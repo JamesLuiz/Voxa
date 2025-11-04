@@ -70,6 +70,28 @@ export class AiService {
     // Pass the businessContext to prompt (simple template, TODO: improve prompt engineering)
     const promptPrefix = businessContext?.name ? `Business Info: Name: ${businessContext.name}, Description: ${businessContext.description} \n` : '';
     const prompt = `${promptPrefix}${payload.message}`;
+    // If the owner indicates a call has started, proactively ensure a ticket exists
+    try {
+      if (payload.message === 'call_started' && payload.context && (payload.context as any).businessId) {
+        const bizId = String((payload.context as any).businessId);
+        // Fetch owner email for isOwner recognition in tickets controller
+        const ownerInfo = await this.httpService.axiosRef.get(
+          `${process.env.BACKEND_BASE_URL || 'http://localhost:3000'}/api/business/${encodeURIComponent(bizId)}/owner`
+        ).then(r => r.data).catch(() => null);
+        // Create an owner-initiated ticket (no customer required)
+        await this.httpService.axiosRef.post(
+          `${process.env.BACKEND_BASE_URL || 'http://localhost:3000'}/api/tickets`,
+          {
+            businessId: bizId,
+            userEmail: ownerInfo?.email || undefined,
+            title: 'Realtime voice session',
+            description: 'Ticket created at call start by agent',
+            priority: 'low',
+          }
+        ).catch(() => undefined);
+      }
+    } catch { /* ignore ticket creation failure */ }
+
     // Determine target LiveKit room name. If we have a businessId use that; else fallback.
     const roomName = (payload.context && (payload.context.businessId || payload.context.roomName))
       ? (payload.context.businessId || payload.context.roomName)

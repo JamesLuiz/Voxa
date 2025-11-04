@@ -70,12 +70,7 @@ export class AppController {
   @Post('/rooms/create')
   async createRoom(
     @Body()
-    body: {
-      roomName?: string;
-      participantName?: string;
-      businessId?: string;
-      role?: 'owner' | 'customer';
-    },
+  body: { roomName?: string; participantName?: string; businessId?: string; role?: 'owner' | 'customer' },
   ) {
     const roomName = body.roomName || `room-${Date.now()}`;
     const participantName = body.participantName || 'guest';

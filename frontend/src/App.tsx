@@ -15,6 +15,8 @@ import Tickets from "./pages/dashboard/Tickets";
 import Meetings from "./pages/dashboard/Meetings";
 import Analytics from "./pages/dashboard/Analytics";
 import CustomerChat from "./pages/CustomerChat";
+import GeneralRegister from "./pages/GeneralRegister";
+import GeneralLogin from "./pages/GeneralLogin";
 import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 
@@ -30,6 +32,8 @@ const App = () => (
           <Route path="/" element={<Splash />} />
           <Route path="/register" element={<Register />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/general/register" element={<GeneralRegister />} />
+          <Route path="/general/login" element={<GeneralLogin />} />
           <Route path="/dashboard" element={<Dashboard />}>
             <Route index element={<Overview />} />
             <Route path="chat" element={<ChatAI />} />
@@ -41,6 +45,7 @@ const App = () => (
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/chat/:slug" element={<CustomerChat />} />
+          <Route path="/general-chat/:slug" element={<CustomerChat role="customer" />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

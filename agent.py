@@ -72,6 +72,7 @@ mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 # (even with a new identity) can pick up prior context for the same room.
 conversation_histories: dict = {}
 HISTORY_LIMIT = 10
+room_user_identity: dict = {}
 
 # Redis client (optional). If REDIS_URL is set and redis package is available,
 # we'll persist room histories to Redis so they survive agent restarts and can
@@ -122,6 +123,81 @@ def update_history(room_name: str, role: str, content: str):
             redis_client.set(f"voxa:history:{room_name}", _json.dumps(hist))
         except Exception:
             logger.debug('Failed to persist room history to Redis')
+
+async def persist_user_message_if_possible(ctx, user_role: str, text: str, business_id: str):
+    """Persist user messages to DB for customers (by email+businessId) and general users (by email)."""
+    try:
+        # Try to get known identity from in-memory map first
+        room = getattr(ctx, 'room', None)
+        rname = getattr(room, 'name', None) if room is not None else None
+        identity = room_user_identity.get(rname, {}) if rname else {}
+
+        # Extract metadata for email fallback
+        metadata = getattr(room, 'metadata', {}) if hasattr(room, 'metadata') else {}
+        if isinstance(metadata, str):
+            try:
+                import json as _json
+                metadata = _json.loads(metadata)
+            except Exception:
+                metadata = {}
+        email = identity.get('email') or (metadata.get('email') if isinstance(metadata, dict) else None)
+
+        if not email or not isinstance(email, str) or '@' not in email:
+            return  # can't persist without an email identifier
+
+        import requests as _req
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        payload = { 'role': 'user', 'content': text }
+
+        if user_role == 'customer' and business_id:
+            try:
+                _req.post(f"{backend_url}/api/crm/customers/email/{email}/conversations", params={'businessId': business_id}, json=payload, timeout=6)
+            except Exception:
+                pass
+        elif user_role == 'general':
+            try:
+                _req.post(f"{backend_url}/api/general/users/email/{email}/conversations", json=payload, timeout=6)
+            except Exception:
+                pass
+    except Exception:
+        logger.debug('persist_user_message_if_possible failed')
+
+async def persist_assistant_message_if_possible(ctx, user_role: str, text: str, business_id: str):
+    """Persist assistant (agent) messages to DB for customers and general users."""
+    try:
+        room = getattr(ctx, 'room', None)
+        rname = getattr(room, 'name', None) if room is not None else None
+        identity = room_user_identity.get(rname, {}) if rname else {}
+
+        # Metadata fallback
+        metadata = getattr(room, 'metadata', {}) if hasattr(room, 'metadata') else {}
+        if isinstance(metadata, str):
+            try:
+                import json as _json
+                metadata = _json.loads(metadata)
+            except Exception:
+                metadata = {}
+        email = identity.get('email') or (metadata.get('email') if isinstance(metadata, dict) else None)
+
+        if not email or not isinstance(email, str) or '@' not in email:
+            return
+
+        import requests as _req
+        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        payload = { 'role': 'assistant', 'content': text }
+
+        if user_role == 'customer' and business_id:
+            try:
+                _req.post(f"{backend_url}/api/crm/customers/email/{email}/conversations", params={'businessId': business_id}, json=payload, timeout=6)
+            except Exception:
+                pass
+        elif user_role == 'general':
+            try:
+                _req.post(f"{backend_url}/api/general/users/email/{email}/conversations", json=payload, timeout=6)
+            except Exception:
+                pass
+    except Exception:
+        logger.debug('persist_assistant_message_if_possible failed')
 
 
 # ------------------ ASSISTANT ------------------
@@ -332,6 +408,16 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
     except Exception:
         raise
     
+    # Update known identity for this room
+    try:
+        rname = room_name
+        room_user_identity[rname] = {
+            'role': 'customer',
+            'email': cust.get('email') if isinstance(cust, dict) else None,
+            'businessId': business_id
+        }
+    except Exception:
+        pass
     return cust
 
 
@@ -416,10 +502,11 @@ async def entrypoint(ctx: agents.JobContext):
 
     # 3. Format the agent instruction with business context
     is_owner = (user_role == 'owner')
+    is_general = (user_role == 'general')
     agent_config = business_context.get('agentConfig', {}) if isinstance(business_context, dict) else {}
 
     # Evaluate mode first to avoid format string issues
-    mode_value = 'OWNER' if is_owner else 'CUSTOMER'
+    mode_value = 'OWNER' if is_owner else ('GENERAL' if is_general else 'CUSTOMER')
 
     # Convert business_hours dict to string if needed
     business_hours_config = agent_config.get('businessHours', {}) if isinstance(agent_config, dict) else {}
@@ -507,6 +594,11 @@ async def entrypoint(ctx: agents.JobContext):
                 rname = None
             if rname:
                 update_history(rname, 'user', text)
+            # Persist user message if possible
+            try:
+                await persist_user_message_if_possible(ctx, user_role, text, business_id)
+            except Exception:
+                pass
 
             # Generate spoken reply with timeout handling
             try:
@@ -613,6 +705,11 @@ async def entrypoint(ctx: agents.JobContext):
                                 update_history(rname, 'user', text)
                         except:
                             pass
+                            # Persist user message if possible
+                            try:
+                                await persist_user_message_if_possible(ctx, user_role, text, business_id)
+                            except Exception:
+                                pass
                         
                         # Process the text message through the session with timeout handling
                         try:
@@ -771,6 +868,43 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception:
             logger.debug('Could not attach fallback data handler')
 
+        # Attach transcription listeners to capture assistant (agent) speech and persist it
+        try:
+            def on_transcription(event):
+                try:
+                    # Aggregate text from segments
+                    text = ''
+                    if hasattr(event, 'segments') and isinstance(event.segments, list):
+                        try:
+                            text = ' '.join([seg.text for seg in event.segments if getattr(seg, 'text', '')])
+                        except Exception:
+                            text = ''
+                    if not text and hasattr(event, 'text'):
+                        text = getattr(event, 'text', '')
+
+                    if not text or not str(text).strip():
+                        return
+
+                    # Only persist if the transcription is from the agent (local participant)
+                    participant = getattr(event, 'participant', None)
+                    local_participant = getattr(ctx.room, 'local_participant', None)
+                    if local_participant is not None and participant == local_participant:
+                        asyncio.create_task(persist_assistant_message_if_possible(ctx, user_role, text, business_id))
+                except Exception:
+                    pass
+
+            if hasattr(ctx.room, 'on'):
+                try:
+                    ctx.room.on('transcription', on_transcription)
+                except Exception:
+                    pass
+                try:
+                    ctx.room.on('transcriptionReceived', on_transcription)
+                except Exception:
+                    pass
+        except Exception:
+            logger.debug('Could not attach transcription listeners')
+
         # 8. Setup text input handler via AgentSession (if available)
         # AgentSession may have built-in text handling
         try:
@@ -875,7 +1009,7 @@ async def entrypoint(ctx: agents.JobContext):
                     welcome_msg = f"Hi {owner_name}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
                 else:
                     welcome_msg = "Hello! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. How can I assist you today?"
-            else:
+            elif user_role == 'customer':
                 # Customer-facing quick friendly intro using business name if available
                 try:
                     biz_name = business_context.get('name') if isinstance(business_context, dict) else None
@@ -896,6 +1030,9 @@ async def entrypoint(ctx: agents.JobContext):
                                 welcome_msg = f"Hi {local}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
                     except Exception:
                         pass
+            else:
+                # General users (public)
+                welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
             
             # Wrap in timeout to handle LiveKit agent timeout errors gracefully
             try:
@@ -922,7 +1059,7 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception:
                 logger.exception('Failed to prepare customer context')
 
-        # 11. Collect customer info if needed (only for customers)
+        # 11. Collect customer info if needed (customers) and register general users
         if user_role == 'customer' and business_id:
             try:
                 cust = await collect_customer_info_if_needed(session, ctx, ctx.room.name, business_id)
@@ -967,14 +1104,69 @@ async def entrypoint(ctx: agents.JobContext):
                         logger.warning(f"Could not generate thank you message: {reply_err}")
             except Exception:
                 logger.exception('Failed to collect customer info')
+        elif user_role == 'general':
+            # Lightweight identity collection for general users: name, email, location
+            try:
+                hist = get_room_history(ctx.room.name)
+                needed = {'name': None, 'email': None, 'location': None}
+                # Try metadata first
+                md = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
+                if isinstance(md, str):
+                    try:
+                        import json as _json
+                        md = _json.loads(md)
+                    except Exception:
+                        md = {}
+                if isinstance(md, dict):
+                    for k in needed:
+                        needed[k] = needed[k] or md.get(k)
 
-        # 12. Timeout monitoring removed - allow natural conversation flow
-        
-        # 13. Keep session alive - the session will run until the room ends
-        # The agent stays alive in the room, ready for participants to connect/reconnect
-        # No need for await asyncio.Future() as the session manages its own lifecycle
-        
-        # Wait for the session to complete (room closing)
+                async def ask(prompt_text: str, validate_fn):
+                    await asyncio.wait_for(session.generate_reply(instructions=prompt_text), timeout=30.0)
+                    # Wait for user response
+                    tries = 0
+                    while tries < 30:
+                        await asyncio.sleep(0.5)
+                        new_hist = get_room_history(ctx.room.name)
+                        if len(new_hist) > len(hist):
+                            reply = new_hist[-1]['content']
+                            if validate_fn(reply):
+                                return reply
+                        tries += 1
+                    return None
+
+                if not needed['name']:
+                    needed['name'] = await ask("To get acquainted, what's your name?", lambda v: isinstance(v, str) and len(v.strip()) > 1)
+                if not needed['email']:
+                    needed['email'] = await ask("What's your email? I'll use it to keep context between chats.", lambda v: isinstance(v, str) and '@' in v and '.' in v)
+                if not needed['location']:
+                    needed['location'] = await ask("And where are you located? (city, country)", lambda v: isinstance(v, str) and len(v.strip()) > 1)
+
+                # Register general user in backend (idempotent)
+                try:
+                    import requests as _req
+                    backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+                    _req.post(f"{backend_url}/api/auth/general/register", json={
+                        'name': needed['name'] or 'Guest',
+                        'email': needed['email'] or 'unknown@example.com',
+                        'location': needed['location'] or 'unknown',
+                    }, timeout=10)
+                except Exception:
+                    pass
+                # Cache identity for future persistence
+                try:
+                    rname = getattr(ctx.room, 'name', None)
+                    if rname:
+                        room_user_identity[rname] = {
+                            'role': 'general',
+                            'email': needed['email'] or None
+                        }
+                except Exception:
+                    pass
+            except Exception:
+                logger.debug('general user onboarding failed')
+
+       
         # This allows the agent to stay alive for multiple connection cycles
         try:
             # Keep the entrypoint running until room closes

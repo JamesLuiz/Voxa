@@ -1,10 +1,13 @@
 import { Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
+import { CreateTicketDto, UpdateTicketStatusDto, AssignTicketDto, AddNoteDto } from '../dto/tickets.dto';
+import { ApiTags } from '@nestjs/swagger';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Ticket, TicketDocument } from '../schemas/ticket.schema';
 import { Business, BusinessDocument } from '../schemas/business.schema';
 import { Customer, CustomerDocument } from '../schemas/customer.schema';
 
+@ApiTags('Tickets')
 @Controller('api/tickets')
 export class TicketsController {
   constructor(
@@ -16,7 +19,7 @@ export class TicketsController {
   // Create a ticket. Accepts either businessId or businessSlug, and either customerId or customerEmail.
   // If only customerEmail is provided, the controller will try to find or create the customer (upsert by email).
   @Post()
-  async create(@Body() body: any) {
+  async create(@Body() body: CreateTicketDto) {
     // Resolve business: prefer businessId, else businessSlug
     let businessId: Types.ObjectId | null = null;
     if (body.businessId) {
@@ -33,9 +36,9 @@ export class TicketsController {
     }
     if (!businessId) throw new Error('Missing or invalid business identifier (businessId or businessSlug required)');
 
-    // Determine if caller is owner by email
-    const callerEmail = body.userEmail || body.email || '';
-    const business = await this.businessModel.findById(businessId).lean();
+  // Determine if caller is owner by email
+  const callerEmail = body.userEmail || '';
+  const business = await this.businessModel.findById(businessId).lean();
 
     let isOwner = false;
     let ownerName = '';
@@ -46,40 +49,30 @@ export class TicketsController {
       }
     }
 
-    // Resolve or create customer. If the caller is the owner and they want owner-level behavior, we don't require a customer.
+    // Resolve or create customer using provided userEmail (customer's email) and optional customerName/phone.
+    // If the caller is the owner and they want owner-level behavior, we don't require a customer.
     let customerId: Types.ObjectId | null = null;
-    if (body.customerId) {
-      try {
-        customerId = new Types.ObjectId(body.customerId);
-      } catch {
-        customerId = null;
-      }
-    }
-
-    if (!customerId && body.customerEmail) {
-      // Attempt to find an existing customer for this business by email
-      const email = String(body.customerEmail).trim().toLowerCase();
+    if (callerEmail) {
+      const email = String(callerEmail).trim().toLowerCase();
       let customer = await this.customerModel.findOne({ businessId, email }).exec();
       if (!customer) {
-        // upsert: create minimal customer record if name or email available
         const name = body.customerName || email.split('@')[0];
         customer = await this.customerModel.create({
           businessId,
           name,
           email,
           phone: body.customerPhone,
-          company: body.customerCompany,
           tags: [],
           conversationHistory: [],
           lastInteraction: new Date(),
         });
       }
-  if (customer && customer._id) customerId = new Types.ObjectId(String((customer as any)._id));
+      if (customer && customer._id) customerId = new Types.ObjectId(String((customer as any)._id));
     }
 
     // If still no customerId and caller is not owner, fail
     if (!customerId && !isOwner) {
-      throw new Error('Missing required: customerId or customerEmail for non-owner requests');
+      throw new Error('Missing required: userEmail (customer email) for non-owner requests');
     }
 
     // Compose ticket document
@@ -97,16 +90,29 @@ export class TicketsController {
 
     const created = await this.ticketModel.create(ticketDoc);
 
-    // Return a richer response to owners
-    if (isOwner) {
-      return {
-        ticket: created,
-        owner: { name: ownerName, email: business.owner.email },
-        business: { businessId: String(business._id), name: business.name },
+    // Build base response
+    const baseResponse: any = { ticket: created };
+
+    // Include business context when available (especially when caller provided businessSlug)
+    if (business) {
+      baseResponse.business = {
+        businessId: String(business._id),
+        name: business.name,
+        slug: business.slug,
+        description: business.description,
+        products: business.products || [],
+        owner: business.owner ? { name: business.owner.name, email: business.owner.email } : undefined,
       };
     }
 
-    return created;
+    // Owner callers get additional owner info
+    if (isOwner) {
+      baseResponse.owner = { name: ownerName, email: business?.owner?.email };
+    }
+
+    // If caller was a non-owner and we did not create an owner-style response, return the created ticket directly
+    if (!isOwner && !baseResponse.business) return created;
+    return baseResponse;
   }
 
   @Get()
@@ -146,7 +152,7 @@ export class TicketsController {
   @Put(':id/status')
   async updateStatus(
     @Param('id') id: string,
-    @Body() body: { status: 'open' | 'in-progress' | 'resolved' | 'closed' },
+    @Body() body: UpdateTicketStatusDto,
   ) {
     const update: any = { status: body.status };
     if (body.status === 'resolved' || body.status === 'closed') update.resolvedAt = new Date();
@@ -154,7 +160,7 @@ export class TicketsController {
   }
 
   @Put(':id/assign')
-  async assign(@Param('id') id: string, @Body() body: { assignedTo: string }) {
+  async assign(@Param('id') id: string, @Body() body: AssignTicketDto) {
     return this.ticketModel.findByIdAndUpdate(
       new Types.ObjectId(id),
       { $set: { assignedTo: body.assignedTo } },
@@ -163,7 +169,7 @@ export class TicketsController {
   }
 
   @Post(':id/notes')
-  async addNote(@Param('id') id: string, @Body() body: { note: string }) {
+  async addNote(@Param('id') id: string, @Body() body: AddNoteDto) {
     return this.ticketModel.findByIdAndUpdate(
       new Types.ObjectId(id),
       { $push: { internalNotes: body.note } },

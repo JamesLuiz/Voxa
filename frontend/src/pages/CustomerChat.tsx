@@ -4,7 +4,7 @@ import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff, Mic } from "lucide-react";
 import { useParams, useNavigate } from "react-router-dom";
-import { customerChat, ownerChat, getLivekitToken, upsertCustomer, getLatestTicket } from "@/lib/api.ts";
+import { customerChat, ownerChat, getLivekitToken, upsertCustomer, getLatestTicket, createTicketForEmail } from "@/lib/api.ts";
 import { getCustomerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
@@ -87,17 +87,26 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
           setCustomerId(_id);
           sessionStorage.setItem('customerId', _id);
         }
-        // Attempt to fetch latest ticket shortly after agent creates it
-        setTimeout(async () => {
-          try {
-            if (finalInfo.email) {
+        // Ensure a ticket exists for this customer
+        try {
+          if (finalInfo.email) {
+            const created = await createTicketForEmail({
+              businessId,
+              customerEmail: finalInfo.email,
+              title: 'Support Request',
+            });
+            const tId = created?.ticket?._id || created?._id || created?.id;
+            if (tId) {
+              setTicketBanner({ id: String(tId) });
+            } else {
+              // fallback: fetch latest
               const t = await getLatestTicket(businessId, finalInfo.email);
               if (t && (t._id || t.id)) {
                 setTicketBanner({ id: String(t._id || t.id) });
               }
             }
-          } catch {}
-        }, 1500);
+          }
+        } catch {}
         return "You’re all set! I’ve saved your details and opened a support ticket.";
       } catch (err) {
         setCollectStep('none');
@@ -332,7 +341,7 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
               {livekitInfo && (
                 <div className="rounded-xl border border-border overflow-hidden">
                   <LiveKitRoom
-                    key={`room-${Date.now()}-${livekitInfo.token.slice(-10)}`}
+                    key={`room-${livekitInfo.token.slice(-10)}`}
                     serverUrl={livekitInfo.serverUrl || getCustomerRoomUrl(businessId)}
                     token={livekitInfo.token}
                     connect

@@ -8,32 +8,32 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    /* Core 4 Colors */
-    --background: 220 20% 6%;
-    --foreground: 0 0% 98%;
+    /* Core 4 Colors - AI Futuristic Theme */
+    --background: 222 47% 4%;
+    --foreground: 210 40% 98%;
     --primary: 188 94% 55%;
     --accent: 280 85% 65%;
 
     /* Derived colors */
-    --card: 220 20% 6%;
-    --card-foreground: 0 0% 98%;
+    --card: 222 47% 6%;
+    --card-foreground: 210 40% 98%;
 
-    --popover: 220 20% 6%;
-    --popover-foreground: 0 0% 98%;
+    --popover: 222 47% 6%;
+    --popover-foreground: 210 40% 98%;
 
-    --primary-foreground: 220 20% 6%;
-    --primary-glow: 188 94% 65%;
+    --primary-foreground: 222 47% 4%;
+    --primary-glow: 188 94% 70%;
 
-    --secondary: 220 15% 12%;
-    --secondary-foreground: 0 0% 98%;
+    --secondary: 222 40% 10%;
+    --secondary-foreground: 210 40% 98%;
 
-    --muted: 220 15% 12%;
-    --muted-foreground: 217 10% 60%;
+    --muted: 222 40% 12%;
+    --muted-foreground: 215 20% 65%;
 
-    --accent-foreground: 220 20% 6%;
+    --accent-foreground: 222 47% 4%;
 
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 98%;
+    --destructive: 280 85% 55%;
+    --destructive-foreground: 210 40% 98%;
 
     --border: 220 15% 15%;
     --input: 220 15% 15%;
@@ -50,20 +50,25 @@ All colors MUST be HSL.
     --sidebar-border: 220 15% 15%;
     --sidebar-ring: 188 94% 55%;
 
-    /* Glassmorphism */
-    --glass-bg: 220 20% 8% / 0.7;
-    --glass-border: 188 94% 55% / 0.15;
+    /* Glassmorphism - Enhanced AI Theme */
+    --glass-bg: 222 47% 6% / 0.8;
+    --glass-border: 188 94% 55% / 0.2;
     
-    /* Gradients */
+    /* Gradients - Futuristic */
     --gradient-primary: linear-gradient(135deg, hsl(188 94% 55%), hsl(280 85% 65%));
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(188 94% 55% / 0.2), transparent 50%);
+    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(188 94% 55% / 0.15), transparent 60%);
+    --gradient-mesh: radial-gradient(at 27% 37%, hsl(188 94% 55% / 0.12) 0px, transparent 50%),
+                     radial-gradient(at 97% 21%, hsl(280 85% 65% / 0.12) 0px, transparent 50%),
+                     radial-gradient(at 52% 99%, hsl(188 94% 55% / 0.08) 0px, transparent 50%);
     
-    /* Shadows */
-    --shadow-glow: 0 0 50px hsl(188 94% 55% / 0.4);
-    --shadow-glass: 0 8px 32px hsl(0 0% 0% / 0.6);
+    /* Shadows - Neon Glow */
+    --shadow-glow: 0 0 60px hsl(188 94% 55% / 0.5);
+    --shadow-glass: 0 8px 32px hsl(0 0% 0% / 0.7);
+    --shadow-neon: 0 0 20px hsl(188 94% 55% / 0.6), 0 0 40px hsl(280 85% 65% / 0.4);
     
     /* Animations */
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-bounce: all 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
   }
 }
 
@@ -74,20 +79,32 @@ All colors MUST be HSL.
 
   body {
     @apply bg-background text-foreground font-sans antialiased;
-    background-image: var(--gradient-glow);
+    background: var(--gradient-mesh), hsl(var(--background));
     background-attachment: fixed;
   }
   
-  /* Glassmorphism utilities */
+  /* Glassmorphism utilities - Enhanced */
   .glass {
-    background: rgba(var(--glass-bg));
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-    border: 1px solid rgba(var(--glass-border));
+    background: hsl(var(--glass-bg));
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid hsl(var(--glass-border));
+    box-shadow: var(--shadow-glass);
   }
   
   .glow {
     box-shadow: var(--shadow-glow);
+  }
+
+  .neon-glow {
+    box-shadow: var(--shadow-neon);
+  }
+
+  .gradient-text {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
 }
 
@@ -102,19 +119,46 @@ All colors MUST be HSL.
 }
 
 @layer utilities {
-  .animate-fade-in { animation: fadeIn 0.3s ease both; }
-  .animate-slide-up { animation: slideUp 0.3s ease both; }
-  .animate-pulse-glow { animation: pulseGlow 1.8s ease-in-out infinite; }
+  .animate-fade-in { animation: fadeIn 0.5s ease both; }
+  .animate-slide-up { animation: slideUp 0.5s ease both; }
+  .animate-pulse-glow { animation: pulseGlow 2s ease-in-out infinite; }
   .animate-wave { animation: wave 1s ease-in-out infinite; }
+  .animate-float { animation: float 3s ease-in-out infinite; }
+  .animate-glow-pulse { animation: glowPulse 2s ease-in-out infinite; }
+  .animate-typing { animation: typing 1s steps(20) both; }
 }
 
-@keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-@keyframes slideUp { from { transform: translateY(8px); opacity: 0 } to { transform: translateY(0); opacity: 1 } }
-@keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 0 rgba(0,0,0,0), var(--shadow-glow); transform: scale(1); }
-  50% { box-shadow: var(--shadow-glow); transform: scale(1.02); }
+@keyframes fadeIn { 
+  from { opacity: 0; transform: translateY(10px); } 
+  to { opacity: 1; transform: translateY(0); } 
 }
+
+@keyframes slideUp { 
+  from { transform: translateY(20px); opacity: 0; } 
+  to { transform: translateY(0); opacity: 1; } 
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 20px hsl(188 94% 55% / 0.3); transform: scale(1); }
+  50% { box-shadow: 0 0 40px hsl(188 94% 55% / 0.6), 0 0 60px hsl(280 85% 65% / 0.4); transform: scale(1.02); }
+}
+
 @keyframes wave {
-  0%, 100% { transform: scaleY(0.4); opacity: 0.6 }
-  50% { transform: scaleY(1); opacity: 1 }
+  0%, 100% { transform: scaleY(0.3); opacity: 0.5; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { filter: drop-shadow(0 0 10px hsl(188 94% 55% / 0.5)); }
+  50% { filter: drop-shadow(0 0 20px hsl(188 94% 55% / 0.8)) drop-shadow(0 0 30px hsl(280 85% 65% / 0.6)); }
+}
+
+@keyframes typing {
+  from { width: 0; }
+  to { width: 100%; }
 }
