@@ -69,8 +69,8 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
         // ignore; UI can show generic state
       }
     })();
-    // On mount, if no customerId and we're a customer, start collecting info
-    if (!customerId && effectiveRole === 'customer') setCollectStep('name');
+  // On mount, if no customerId and we're a customer, start collecting info
+  if (!customerId && effectiveRole === 'customer') setCollectStep('name');
   }, [customerId, slug, effectiveRole]);
 
   // If an owner is authenticated, attempt to fetch the business name from the owner's businessId
@@ -185,11 +185,11 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
               console.warn('[CustomerChat] Failed to fetch owner from DB, falling back to localStorage:', err);
               // Fallback to localStorage if DB fetch fails
               const ou = localStorage.getItem('voxa_user');
-              if (ou) {
-                try {
-                  const parsed = JSON.parse(ou);
-                  userName = parsed?.name || undefined;
-                  userEmail = parsed?.email || undefined;
+          if (ou) {
+            try {
+              const parsed = JSON.parse(ou);
+              userName = parsed?.name || undefined;
+              userEmail = parsed?.email || undefined;
                 } catch (_) {}
               }
             }
@@ -238,8 +238,8 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
                 const parsed = JSON.parse(storedCustomer);
                 emailToFetch = parsed?.email || undefined;
                 userName = parsed?.name || userName;
-              }
-            } catch (_) {}
+        }
+      } catch (_) {}
           }
           
           if (emailToFetch && businessId) {
@@ -267,7 +267,7 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
         console.error('[CustomerChat] Error fetching user data:', err);
       }
 
-      const kvRole = effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer');
+  const kvRole = effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer');
       const info = await getLivekitToken({ role: kvRole, businessId, userName, userEmail });
       
       // Clear any stale state
@@ -281,11 +281,11 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
       setLivekitInfo(info);
       setIsCallActive(true);
       setErrorBanner("");
-      try { localStorage.setItem('voxa_last_session', JSON.stringify({ role: effectiveRole, businessId })); } catch {}
+  try { localStorage.setItem('voxa_last_session', JSON.stringify({ role: effectiveRole, businessId })); } catch {}
       
       // If owner is initiating the call, notify backend so agent can fetch
       // customer details and greet them when the room connects.
-      if (effectiveRole === 'owner') {
+  if (effectiveRole === 'owner') {
         try {
           await ownerChat('call_started', { businessId });
         } catch (e) {

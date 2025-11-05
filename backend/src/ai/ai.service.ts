@@ -97,6 +97,15 @@ export class AiService {
       ? (payload.context.businessId || payload.context.roomName)
       : 'default-room';
     const roomNameStr = String(roomName || 'default-room');
+    // Ensure the room exists before attempting to send data
+    try {
+      await this.livekit.createRoom(roomNameStr, {
+        role: 'owner',
+        businessId: (payload.context && (payload.context as any).businessId) || undefined,
+      });
+    } catch {
+      // Ignore room creation errors; sendRoomData will log failures if any
+    }
     // Fire-and-forget: attempt to send the text to the LiveKit room
     try {
       // If we have a customer record, send a special greeting event so the
@@ -146,6 +155,15 @@ export class AiService {
     const promptPrefix = businessContext?.name ? `Business Info: Name: ${businessContext.name}, Description: ${businessContext.description} \n` : '';
     const prompt = `${promptPrefix}${payload.message}`;
     const roomName = payload.businessId || 'default-room';
+    // Ensure the room exists before attempting to send data
+    try {
+      await this.livekit.createRoom(String(roomName), {
+        role: 'customer',
+        businessId: payload.businessId,
+      });
+    } catch {
+      // ignore room creation errors
+    }
     try {
       await this.livekit.sendRoomData(roomName, { type: 'text_message', role: 'customer', text: payload.message, businessId: payload.businessId });
     } catch (e) {

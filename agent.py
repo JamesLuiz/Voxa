@@ -139,6 +139,55 @@ def get_room_history(room_name: str):
     return conversation_histories[room_name]
 
 
+async def safe_generate_reply(session: AgentSession, ctx, instructions: str, timeout: float = 30.0, publish_back: bool = True) -> bool:
+    """Call session.generate_reply with robust error handling.
+
+    Returns True if generation was initiated successfully (even if it timed out),
+    False on unrecoverable error. This centralizes handling of LiveKit RealtimeError
+    and provides an option to publish a short data-channel error message back to
+    the clients for UX.
+    """
+    try:
+        # Import here to avoid import issues if LiveKit plugin changes
+        import asyncio as _asyncio
+        try:
+            await _asyncio.wait_for(session.generate_reply(instructions=instructions), timeout=timeout)
+            return True
+        except _asyncio.TimeoutError as te:
+            # Known to happen when the realtime model does not produce a generation_created event
+            logger.warning(f"generate_reply timed out waiting for response: {te}")
+            try:
+                # Best-effort: inform frontend via room data channel
+                if publish_back and hasattr(ctx, 'room') and getattr(ctx.room, 'local_participant', None):
+                    try:
+                        import json as _json
+                        payload = _json.dumps({'type': 'agent_error', 'message': 'Reply generation timed out. Please try again.'})
+                        await ctx.room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return False
+        except Exception as e:
+            # Guard against livekit.agents.llm.realtime.RealtimeError and others
+            msg = str(e)
+            logger.exception(f"Error while generating reply: {msg}")
+            try:
+                if publish_back and hasattr(ctx, 'room') and getattr(ctx.room, 'local_participant', None):
+                    try:
+                        import json as _json
+                        payload = _json.dumps({'type': 'agent_error', 'message': 'Agent failed to generate reply. Please try again later.'})
+                        await ctx.room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return False
+    except Exception as outer:
+        logger.exception(f"safe_generate_reply unexpected error: {outer}")
+        return False
+
+
 def update_history(room_name: str, role: str, content: str):
     """Update conversation history for a specific room with size limit."""
     hist = get_room_history(room_name)
@@ -345,11 +394,8 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
         ]:
             while not collected[field]:
                 try:
-                    await asyncio.wait_for(
-                        session.generate_reply(instructions=prompt_text),
-                        timeout=30.0
-                    )
-                except (asyncio.TimeoutError, Exception) as e:
+                    await safe_generate_reply(session, ctx, prompt_text, timeout=30.0)
+                except Exception as e:
                     logger.warning(f"Failed to send prompt for {field}: {e}")
                     # Continue anyway - user might respond
                 # Wait for user's next reply/message
@@ -385,11 +431,8 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
                             break
                         else:
                             try:
-                                await asyncio.wait_for(
-                                    session.generate_reply(instructions=f"Sorry, that is not a valid {field}, please try again."),
-                                    timeout=30.0
-                                )
-                            except (asyncio.TimeoutError, Exception) as e:
+                                await safe_generate_reply(session, ctx, f"Sorry, that is not a valid {field}, please try again.", timeout=30.0)
+                            except Exception as e:
                                 logger.warning(f"Failed to send validation error message: {e}")
                             hist_len = len(new_hist)
                             retry_count = 0  # reset timeout after invalid input
@@ -427,11 +470,8 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
 
         if not cust or not cust.get('_id'):
             try:
-                await asyncio.wait_for(
-                    session.generate_reply(instructions="Sorry, I couldn't set up your support info. Please try again or contact admin."),
-                    timeout=30.0
-                )
-            except (asyncio.TimeoutError, Exception) as e:
+                await safe_generate_reply(session, ctx, "Sorry, I couldn't set up your support info. Please try again or contact admin.", timeout=30.0)
+            except Exception as e:
                 logger.warning(f"Failed to send error message: {e}")
             raise Exception('Customer upsert failed')
     except Exception:
@@ -511,8 +551,13 @@ async def entrypoint(ctx: agents.JobContext):
         if isinstance(metadata, dict):
             logger.debug(f"Metadata userName: {metadata.get('userName')}, userEmail: {metadata.get('userEmail')}")
 
-        # 2. Fetch business context if we have a businessId
+        # 2. Fetch business context if we have a businessId or can resolve one
         business_context = {}
+        # Helpful extras: frontend may provide slug or owner email in metadata.
+        slug_candidate = None
+        if isinstance(metadata, dict):
+            slug_candidate = metadata.get('slug') or metadata.get('businessSlug') or metadata.get('business_slug')
+
         if business_id:
             try:
                 # Call the tool function directly
@@ -565,6 +610,60 @@ async def entrypoint(ctx: agents.JobContext):
                                 business_context = {}
                     except Exception as e:
                         logger.warning(f"Failed to fetch business context after resolution: {e}")
+            # If still no business_id, try resolving from owner email (metadata) via tools.get_owner_profile
+            if not business_id and isinstance(metadata, dict):
+                owner_email = metadata.get('userEmail') or metadata.get('ownerEmail') or metadata.get('email')
+                if owner_email and isinstance(owner_email, str) and '@' in owner_email:
+                    try:
+                        from tools import get_owner_profile
+                        from livekit.agents import RunContext
+                        mock_ctx = RunContext()
+                        if hasattr(mock_ctx, 'room'):
+                            try:
+                                mock_ctx.room = ctx.room
+                            except Exception:
+                                pass
+                        owner_res = await get_owner_profile(mock_ctx, owner_email)
+                        import json as _json
+                        parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                        # If owner profile includes businessId or businesses list, pick first
+                        if isinstance(parsed, dict):
+                            found_bid = parsed.get('businessId') or parsed.get('business') or parsed.get('business_id')
+                            if found_bid:
+                                business_id = str(found_bid)
+                                try:
+                                    business_context_result = await get_business_context(mock_ctx, business_id)
+                                    if business_context_result:
+                                        business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+        # If we still don't have a business_id but there is a slug provided (customer flow), try resolving by slug
+        if (not business_id) and slug_candidate:
+            try:
+                from livekit.agents import RunContext
+                mock_ctx = RunContext()
+                if hasattr(mock_ctx, 'room'):
+                    try:
+                        mock_ctx.room = ctx.room
+                    except Exception:
+                        pass
+                business_context_result = await get_business_context(mock_ctx, slug_candidate)
+                if business_context_result:
+                    import json as _json
+                    try:
+                        business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
+                        # If resolved, try to extract businessId
+                        if isinstance(business_context, dict):
+                            resolved_id = business_context.get('businessId') or business_context.get('_id')
+                            if resolved_id:
+                                business_id = str(resolved_id)
+                    except Exception:
+                        business_context = {}
+            except Exception:
+                pass
     except Exception as e:
         logger.debug(f"Error preparing metadata/business context: {e}")
 
@@ -666,13 +765,9 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception:
                 pass
 
-            # Generate spoken reply with timeout handling
+            # Generate spoken reply with centralized timeout/error handling
             try:
-                # Wrap in timeout to handle LiveKit agent timeout errors gracefully
-                await asyncio.wait_for(
-                    session.generate_reply(instructions=text),
-                    timeout=30.0  # 30 second timeout for reply generation
-                )
+                await safe_generate_reply(session, ctx, text, timeout=30.0)
 
                 # Send text response back via data channel so frontend can display it
                 try:
@@ -777,22 +872,15 @@ async def entrypoint(ctx: agents.JobContext):
                             except Exception:
                                 pass
                         
-                        # Process the text message through the session with timeout handling
+                        # Process the text message through the session with centralized handling
                         try:
-                            # Wrap in timeout to handle LiveKit agent timeout errors gracefully
-                            await asyncio.wait_for(
-                                session.generate_reply(instructions=text),
-                                timeout=30.0  # 30 second timeout for reply generation
-                            )
-                            logger.info(f"Successfully processed text message and generated reply")
-                        except asyncio.TimeoutError:
-                            logger.warning(f"Reply generation timed out for text message: {text[:50]}")
-                        except Exception as e:
-                            error_msg = str(e).lower()
-                            if 'timeout' in error_msg or 'timed out' in error_msg:
-                                logger.warning(f"Reply generation timed out: {e}")
+                            ok = await safe_generate_reply(session, ctx, text, timeout=30.0)
+                            if ok:
+                                logger.info(f"Successfully processed text message and generated reply")
                             else:
-                                logger.exception(f"Failed to generate reply from text: {e}")
+                                logger.warning(f"Reply generation did not complete for text: {text[:50]}")
+                        except Exception as e:
+                            logger.exception(f"Failed to generate reply from text: {e}")
             except Exception as e:
                 logger.exception(f"Error handling participant data: {e}")
         
@@ -1194,21 +1282,15 @@ async def entrypoint(ctx: agents.JobContext):
             if not participants_connected:
                 logger.warning("No participants connected after waiting, sending welcome message anyway")
             
-            # Wrap in timeout to handle LiveKit agent timeout errors gracefully
+            # Use centralized safe generator for welcome message
             try:
-                await asyncio.wait_for(
-                    session.generate_reply(instructions=welcome_msg),
-                    timeout=30.0  # 30 second timeout for reply generation
-                )
-                logger.info("Welcome message sent via voice successfully")
-            except asyncio.TimeoutError:
-                logger.warning("Initial welcome message generation timed out")
-            except Exception as e:
-                error_msg = str(e).lower()
-                if 'timeout' in error_msg or 'timed out' in error_msg:
-                    logger.warning(f"Initial welcome message timed out: {e}")
+                ok = await safe_generate_reply(session, ctx, welcome_msg, timeout=30.0)
+                if ok:
+                    logger.info("Welcome message sent via voice successfully")
                 else:
-                    logger.warning(f"Welcome message generation error: {e}")
+                    logger.warning("Initial welcome message did not complete")
+            except Exception as e:
+                logger.warning(f"Welcome message generation error: {e}")
         except Exception as e:
             logger.exception(f'Failed to generate initial reply: {e}')
             # welcome_msg is already initialized above, so it will always have a value
@@ -1281,26 +1363,16 @@ async def entrypoint(ctx: agents.JobContext):
                     
                     # Thank the customer and let them know a ticket was created
                     try:
-                        await asyncio.wait_for(
-                            session.generate_reply(
-                                instructions=f"Thank you {cust.get('name')}! I've collected your information and created a support ticket. How can I help you today?"
-                            ),
-                            timeout=30.0
-                        )
-                    except (asyncio.TimeoutError, Exception) as e:
+                        await safe_generate_reply(session, ctx, f"Thank you {cust.get('name')}! I've collected your information and created a support ticket. How can I help you today?", timeout=30.0)
+                    except Exception as e:
                         logger.warning(f"Could not generate thank you message: {e}")
                         # Don't fail the whole flow if reply generation fails
                 except Exception as e:
                     logger.exception(f"Failed to create ticket after collecting customer info: {e}")
                     # Still thank the customer even if ticket creation fails
                     try:
-                        await asyncio.wait_for(
-                            session.generate_reply(
-                                instructions=f"Thank you {cust.get('name')}, I have your info. How can I help you today?"
-                            ),
-                            timeout=30.0
-                        )
-                    except (asyncio.TimeoutError, Exception) as reply_err:
+                        await safe_generate_reply(session, ctx, f"Thank you {cust.get('name')}, I have your info. How can I help you today?", timeout=30.0)
+                    except Exception as reply_err:
                         logger.warning(f"Could not generate thank you message: {reply_err}")
             except Exception:
                 logger.exception('Failed to collect customer info')
@@ -1322,7 +1394,10 @@ async def entrypoint(ctx: agents.JobContext):
                         needed[k] = needed[k] or md.get(k)
 
                 async def ask(prompt_text: str, validate_fn):
-                    await asyncio.wait_for(session.generate_reply(instructions=prompt_text), timeout=30.0)
+                    try:
+                        await safe_generate_reply(session, ctx, prompt_text, timeout=30.0)
+                    except Exception:
+                        pass
                     # Wait for user response
                     tries = 0
                     while tries < 30:
