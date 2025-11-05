@@ -57,7 +57,8 @@ const VoiceCall = () => {
     if (!token) {
       (async () => {
         try {
-          const info = await getLivekitToken({ role: "owner" });
+          const storedBusinessId = (typeof window !== 'undefined' ? localStorage.getItem('voxa_business_id') : null) || undefined;
+          const info = await getLivekitToken({ role: "owner", businessId: storedBusinessId });
           if (!mounted) return;
           setToken(info.token);
           setServerUrl(info.serverUrl || getOwnerRoomUrl());

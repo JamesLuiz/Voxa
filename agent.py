@@ -6,70 +6,28 @@ import asyncio
 from mistralai import Mistral
 
 from livekit import agents, rtc
-from livekit.agents import AgentSession, Agent, RoomInputOptions, function_tool, RunContext
-from livekit.plugins import noise_cancellation, google
-from prompts import AGENT_INSTRUCTION, SESSION_INSTRUCTION
+from livekit.agents import AgentSession, RoomInputOptions
+from livekit.plugins import noise_cancellation
+from prompts import AGENT_INSTRUCTION, CUSTOMER_CARE_INSTRUCTION, SESSION_INSTRUCTION
 from tools import (
-    get_weather,
-    search_web,
-    send_email,
-    crm_lookup,
-    create_ticket,
-    schedule_meeting,
-    get_customer_history,
     get_business_context,
     manage_customer,
-    update_ticket,
-    get_analytics,
-    list_tickets,
 )
+
+from agent import setup_logging, get_logger
 
 # ------------------ SETUP ------------------
 load_dotenv()
-
-# Configure logging based on environment
-def setup_logging():
-    """Setup logging configuration based on execution mode"""
-    # Check if running in development/console mode
-    is_console_mode = any(arg in sys.argv for arg in ['console', 'dev', '--dev', '--console'])
-    
-    if is_console_mode:
-        # Full logging for console/dev mode
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-    else:
-        # Only warnings and errors for prod/start
-        logging.basicConfig(
-            level=logging.WARNING,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-        
-        # Aggressively suppress ALL external library logs in prod mode
-        for logger_name in ['livekit', 'livekit.agents', 'mistralai', 'httpx', 'httpcore', 
-                           'urllib3', 'google', 'openai', 'langchain']:
-            logging.getLogger(logger_name).setLevel(logging.ERROR)
-            logging.getLogger(logger_name).propagate = False
-
 setup_logging()
-
-# Disable LiveKit's internal logging in production
-if 'start' in sys.argv or 'prod' in sys.argv:
-    # Set root logger to ERROR to catch everything
-    logging.getLogger().setLevel(logging.ERROR)
-    
-    # Create our own logger for warnings only
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.WARNING)
-else:
-    logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Initialize Mistral client (NEW API)
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
+from typing import Any
+
 # Quick startup backend connectivity check to help debug DB/backend reachability
-def check_backend_connectivity():
+def check_backend_connectivity() -> None:
     try:
         import requests
         backend_url = os.getenv('BACKEND_URL', 'http://localhost:3000')
@@ -97,261 +55,17 @@ except Exception:
 if not os.getenv('BACKEND_API_KEY'):
     logger.warning('BACKEND_API_KEY not set in environment - protected backend endpoints may return 401 or empty responses')
 
-# Conversation memory scoped by room name so reconnecting participants
-# (even with a new identity) can pick up prior context for the same room.
-conversation_histories: dict = {}
-HISTORY_LIMIT = 10
-room_user_identity: dict = {}
-
-# Redis client (optional). If REDIS_URL is set and redis package is available,
-# we'll persist room histories to Redis so they survive agent restarts and can
-# be shared across workers.
-try:
-    import redis as _redis
-    _redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-    try:
-        redis_client = _redis.from_url(_redis_url)
-    except Exception:
-        # older redis versions: StrictRedis
-        redis_client = _redis.StrictRedis.from_url(_redis_url)
-except Exception:
-    redis_client = None
+from agent import safe_generate_reply
+from agent.history import (
+    get_room_history,
+    update_history,
+    persist_user_message_if_possible,
+    persist_assistant_message_if_possible,
+    room_user_identity,
+)
 
 
-def get_room_history(room_name: str):
-    if room_name not in conversation_histories:
-        # Try to load from Redis if available
-        if redis_client:
-            try:
-                raw = redis_client.get(f"voxa:history:{room_name}")
-                if raw:
-                    try:
-                        import json as _json
-                        conversation_histories[room_name] = _json.loads(raw)
-                    except Exception:
-                        conversation_histories[room_name] = []
-                else:
-                    conversation_histories[room_name] = []
-            except Exception:
-                conversation_histories[room_name] = []
-        else:
-            conversation_histories[room_name] = []
-    return conversation_histories[room_name]
-
-
-async def safe_generate_reply(session: AgentSession, ctx, instructions: str, timeout: float = 30.0, publish_back: bool = True) -> bool:
-    """Call session.generate_reply with robust error handling.
-
-    Returns True if generation was initiated successfully (even if it timed out),
-    False on unrecoverable error. This centralizes handling of LiveKit RealtimeError
-    and provides an option to publish a short data-channel error message back to
-    the clients for UX.
-    """
-    try:
-        # Import here to avoid import issues if LiveKit plugin changes
-        import asyncio as _asyncio
-        try:
-            await _asyncio.wait_for(session.generate_reply(instructions=instructions), timeout=timeout)
-            return True
-        except _asyncio.TimeoutError as te:
-            # Known to happen when the realtime model does not produce a generation_created event
-            logger.warning(f"generate_reply timed out waiting for response: {te}")
-            try:
-                # Best-effort: inform frontend via room data channel
-                if publish_back and hasattr(ctx, 'room') and getattr(ctx.room, 'local_participant', None):
-                    try:
-                        import json as _json
-                        payload = _json.dumps({'type': 'agent_error', 'message': 'Reply generation timed out. Please try again.'})
-                        await ctx.room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            return False
-        except Exception as e:
-            # Guard against livekit.agents.llm.realtime.RealtimeError and others
-            msg = str(e)
-            logger.exception(f"Error while generating reply: {msg}")
-            try:
-                if publish_back and hasattr(ctx, 'room') and getattr(ctx.room, 'local_participant', None):
-                    try:
-                        import json as _json
-                        payload = _json.dumps({'type': 'agent_error', 'message': 'Agent failed to generate reply. Please try again later.'})
-                        await ctx.room.local_participant.publish_data(payload.encode('utf-8'), reliable=True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            return False
-    except Exception as outer:
-        logger.exception(f"safe_generate_reply unexpected error: {outer}")
-        return False
-
-
-def update_history(room_name: str, role: str, content: str):
-    """Update conversation history for a specific room with size limit."""
-    hist = get_room_history(room_name)
-    hist.append({"role": role, "content": content})
-    if len(hist) > HISTORY_LIMIT:
-        hist.pop(0)
-    # Persist to Redis (best-effort)
-    if redis_client:
-        try:
-            import json as _json
-            redis_client.set(f"voxa:history:{room_name}", _json.dumps(hist))
-        except Exception:
-            logger.debug('Failed to persist room history to Redis')
-
-async def persist_user_message_if_possible(ctx, user_role: str, text: str, business_id: str):
-    """Persist user messages to DB for customers (by email+businessId) and general users (by email)."""
-    try:
-        # Try to get known identity from in-memory map first
-        room = getattr(ctx, 'room', None)
-        rname = getattr(room, 'name', None) if room is not None else None
-        identity = room_user_identity.get(rname, {}) if rname else {}
-
-        # Extract metadata for email fallback
-        metadata = getattr(room, 'metadata', {}) if hasattr(room, 'metadata') else {}
-        if isinstance(metadata, str):
-            try:
-                import json as _json
-                metadata = _json.loads(metadata)
-            except Exception:
-                metadata = {}
-        email = identity.get('email') or (metadata.get('email') if isinstance(metadata, dict) else None)
-
-        if not email or not isinstance(email, str) or '@' not in email:
-            return  # can't persist without an email identifier
-
-        import requests as _req
-        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
-        payload = { 'role': 'user', 'content': text }
-
-        if user_role == 'customer' and business_id:
-            try:
-                _req.post(f"{backend_url}/api/crm/customers/email/{email}/conversations", params={'businessId': business_id}, json=payload, timeout=6)
-            except Exception:
-                pass
-        elif user_role == 'general':
-            try:
-                _req.post(f"{backend_url}/api/general/users/email/{email}/conversations", json=payload, timeout=6)
-            except Exception:
-                pass
-    except Exception:
-        logger.debug('persist_user_message_if_possible failed')
-
-async def persist_assistant_message_if_possible(ctx, user_role: str, text: str, business_id: str):
-    """Persist assistant (agent) messages to DB for customers and general users."""
-    try:
-        room = getattr(ctx, 'room', None)
-        rname = getattr(room, 'name', None) if room is not None else None
-        identity = room_user_identity.get(rname, {}) if rname else {}
-
-        # Metadata fallback
-        metadata = getattr(room, 'metadata', {}) if hasattr(room, 'metadata') else {}
-        if isinstance(metadata, str):
-            try:
-                import json as _json
-                metadata = _json.loads(metadata)
-            except Exception:
-                metadata = {}
-        email = identity.get('email') or (metadata.get('email') if isinstance(metadata, dict) else None)
-
-        if not email or not isinstance(email, str) or '@' not in email:
-            return
-
-        import requests as _req
-        backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
-        payload = { 'role': 'assistant', 'content': text }
-
-        if user_role == 'customer' and business_id:
-            try:
-                _req.post(f"{backend_url}/api/crm/customers/email/{email}/conversations", params={'businessId': business_id}, json=payload, timeout=6)
-            except Exception:
-                pass
-        elif user_role == 'general':
-            try:
-                _req.post(f"{backend_url}/api/general/users/email/{email}/conversations", json=payload, timeout=6)
-            except Exception:
-                pass
-    except Exception:
-        logger.debug('persist_assistant_message_if_possible failed')
-
-
-# ------------------ ASSISTANT ------------------
-class Assistant(Agent):
-    def __init__(self, instructions: str) -> None:
-        super().__init__(
-            instructions=instructions,
-            llm=google.beta.realtime.RealtimeModel(
-                voice="Aoede",
-                temperature=0.8,
-            ),
-            tools=[
-                get_weather,
-                search_web,
-                send_email,
-                crm_lookup,
-                create_ticket,
-                schedule_meeting,
-                get_customer_history,
-                get_business_context,
-                manage_customer,
-                update_ticket,
-                get_analytics,
-                list_tickets,
-            ],
-        )
-    
-    @function_tool(
-        description="Use advanced reasoning for complex analysis, data interpretation, or multi-step problem solving. Use this for queries that require deep analysis, logic, or detailed explanations."
-    )
-    def deep_reasoning(self, run_ctx: RunContext, query: str) -> str:
-        """
-        Performs deep reasoning using Mistral for complex queries.
-        
-        Args:
-            query: The question or problem that requires advanced reasoning
-        """
-        try:
-            logger.debug(f"Using Mistral for deep reasoning: {query[:50]}...")
-
-            # Attempt to derive room name from run_ctx if present so we can
-            # include room-scoped history. Fall back to global short history.
-            room_name = getattr(run_ctx, 'room', None)
-            if room_name is not None and hasattr(room_name, 'name'):
-                room_name = room_name.name
-
-            messages = [{"role": "system", "content": "You are an expert reasoning assistant. Provide clear, logical, and detailed analysis."}]
-
-            if room_name:
-                hist = get_room_history(room_name)
-                # include up to last 5 messages
-                messages.extend(hist[-5:])
-            else:
-                # fallback: no room scope available
-                messages.extend([])
-
-            messages.append({"role": "user", "content": query})
-
-            completion = mistral_client.chat.complete(
-                model="mistral-medium",
-                messages=messages,
-            )
-
-            response = completion.choices[0].message.content
-            logger.debug("Mistral reasoning complete")
-
-            # Update room history if possible
-            if room_name:
-                update_history(room_name, "user", query)
-                update_history(room_name, "assistant", response)
-
-            return response
-
-        except Exception as e:
-            logger.warning(f"Mistral reasoning failed: {e}")
-            return f"I encountered an error while processing that request: {str(e)}"
+from agent.assistant import Assistant
 
 
 async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name: str, business_id: str):
@@ -529,19 +243,54 @@ async def entrypoint(ctx: agents.JobContext):
     
     try:
         # 1. Parse and normalize metadata FIRST (before any other operations)
-        metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
-        if isinstance(metadata, str):
-            try:
-                import json as _json
-                metadata = _json.loads(metadata)
-            except Exception:
-                logger.debug(f"Failed to parse metadata as JSON: {metadata}")
-                metadata = {'raw': metadata}
+        # Try multiple methods to get metadata
+        metadata = {}
+        
+        # Method 1: Room metadata
+        room_meta = getattr(ctx.room, 'metadata', None)
+        if room_meta:
+            if isinstance(room_meta, str):
+                try:
+                    import json as _json
+                    metadata = _json.loads(room_meta)
+                except Exception:
+                    logger.debug(f"Failed to parse room metadata as JSON: {room_meta}")
+                    metadata = {}
+            elif isinstance(room_meta, dict):
+                metadata = room_meta.copy()
+        
+        # Method 2: Check if room name is a business ID (backend uses businessId as room name)
+        room_name = getattr(ctx.room, 'name', '')
+        if not metadata.get('businessId') and room_name and len(room_name) == 24 and room_name.isalnum():
+            # Looks like MongoDB ObjectId - could be businessId
+            metadata['businessId'] = room_name
+            logger.debug(f"Using room name as businessId: {room_name}")
+        
+        # Method 3: Check participant metadata (if available)
+        try:
+            if hasattr(ctx.room, 'remote_participants'):
+                for participant in ctx.room.remote_participants.values():
+                    part_meta = getattr(participant, 'metadata', None)
+                    if part_meta:
+                        if isinstance(part_meta, str):
+                            try:
+                                import json as _json
+                                part_dict = _json.loads(part_meta)
+                                if isinstance(part_dict, dict):
+                                    metadata.update(part_dict)
+                            except Exception:
+                                pass
+                        elif isinstance(part_meta, dict):
+                            metadata.update(part_meta)
+                    break  # Just check first participant
+        except Exception:
+            pass
+
         if not isinstance(metadata, dict):
             metadata = {}
 
         user_role = metadata.get('role', 'customer')
-        business_id = metadata.get('businessId', '')
+        business_id = metadata.get('businessId', '') or metadata.get('business_id', '') or metadata.get('business', '')
         is_owner = (user_role == 'owner')
         is_general = (user_role == 'general')
         
@@ -692,6 +441,13 @@ async def entrypoint(ctx: agents.JobContext):
         custom_prompt=agent_config.get('customPrompt', '') if isinstance(agent_config, dict) else ''
     )
 
+    # If customer role, append customer care guidance
+    if not is_owner and not is_general:
+        try:
+            formatted_instruction = f"{formatted_instruction}\n\n{CUSTOMER_CARE_INSTRUCTION}"
+        except Exception:
+            pass
+
     # 4. Create the session
     session = AgentSession()
 
@@ -704,6 +460,75 @@ async def entrypoint(ctx: agents.JobContext):
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
+
+    # Fetch owner profile for owners to get name
+    owner_name = None
+    owner_info = {}
+    if is_owner and business_id:
+        try:
+            from tools import get_owner_profile
+            from livekit.agents import RunContext
+            mock_ctx = RunContext()
+            if hasattr(mock_ctx, 'room'):
+                try:
+                    mock_ctx.room = ctx.room
+                except Exception:
+                    pass
+            owner_email = metadata.get('userEmail') or metadata.get('ownerEmail') or metadata.get('email')
+            if owner_email:
+                owner_res = await get_owner_profile(mock_ctx, owner_email)
+                import json as _json
+                parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                if isinstance(parsed, dict):
+                    owner_info = parsed
+                    owner_name = parsed.get('name')
+            elif business_id:
+                # Try fetching by business ID
+                owner_res = await get_owner_profile(mock_ctx, business_id)
+                parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                if isinstance(parsed, dict):
+                    owner_info = parsed
+                    owner_name = parsed.get('name')
+        except Exception as e:
+            logger.debug(f"Could not fetch owner profile: {e}")
+    
+    # Fallback to metadata userName if available
+    if not owner_name and metadata.get('userName'):
+        owner_name = metadata.get('userName')
+    
+    # Get business name from context
+    business_name = business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business'
+    
+    # Create role-specific welcome message
+    welcome_message = SESSION_INSTRUCTION  # Default fallback
+    
+    if is_owner:
+        if owner_name and business_name != 'the business':
+            welcome_message = f"Hi {owner_name}! Welcome back to your Voxa business assistant for {business_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+        elif owner_name:
+            welcome_message = f"Hi {owner_name}! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+        elif business_name != 'the business':
+            welcome_message = f"Hi! Welcome back to your Voxa business assistant for {business_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+        else:
+            welcome_message = "Hi! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+    elif is_general:
+        general_name = metadata.get('userName') or metadata.get('name')
+        if general_name:
+            welcome_message = f"Hey {general_name}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
+        else:
+            welcome_message = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+    else:
+        # Customer mode
+        if business_name != 'the business':
+            welcome_message = f"Hi there! I'm Voxa, your AI assistant for {business_name}. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
+        else:
+            welcome_message = "Hi there! I'm Voxa, your AI assistant. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
+    
+    # Send initial session welcome message once on connect
+    try:
+        await safe_generate_reply(session, ctx, welcome_message, timeout=30.0)
+    except Exception:
+        pass
 
     # 6. Connect to the room (IMPORTANT - this was missing!)
     await ctx.connect()
