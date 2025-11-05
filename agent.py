@@ -68,6 +68,35 @@ else:
 # Initialize Mistral client (NEW API)
 mistral_client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
+# Quick startup backend connectivity check to help debug DB/backend reachability
+def check_backend_connectivity():
+    try:
+        import requests
+        backend_url = os.getenv('BACKEND_URL', 'http://localhost:3000')
+        health = requests.get(f"{backend_url}/api/business/resolve", timeout=3)
+        if health.ok:
+            try:
+                data = health.json()
+                logger.info(f"Backend reachable: resolved business {data.get('businessId') or data.get('name', '(none)')}")
+            except Exception:
+                logger.info("Backend reachable: /api/business/resolve returned non-json response")
+        else:
+            logger.warning(f"Backend responded but returned status {health.status_code}")
+    except Exception as e:
+        logger.warning(f"Backend connectivity check failed: {e}")
+
+
+# Run the connectivity check at import/startup (best-effort)
+try:
+    check_backend_connectivity()
+except Exception:
+    pass
+
+# Warn if BACKEND_API_KEY is not configured - many protected backend endpoints
+# expect this key when tools call into the backend.
+if not os.getenv('BACKEND_API_KEY'):
+    logger.warning('BACKEND_API_KEY not set in environment - protected backend endpoints may return 401 or empty responses')
+
 # Conversation memory scoped by room name so reconnecting participants
 # (even with a new identity) can pick up prior context for the same room.
 conversation_histories: dict = {}
@@ -323,48 +352,48 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
                 except (asyncio.TimeoutError, Exception) as e:
                     logger.warning(f"Failed to send prompt for {field}: {e}")
                     # Continue anyway - user might respond
-            # Wait for user's next reply/message
-            hist_len = len(hist)
-            retry_count = 0
-            max_retries = 30  # 15 seconds timeout
-            
-            while retry_count < max_retries:
-                await asyncio.sleep(0.5)
-                retry_count += 1
-                
-                # Check again for new message or metadata update
-                metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
-                if isinstance(metadata, str):
-                    try:
-                        import json as _json
-                        metadata = _json.loads(metadata)
-                    except Exception:
-                        metadata = {}
-                if not isinstance(metadata, dict):
-                    metadata = {}
-                
-                if not collected[field] and metadata.get(field):
-                    collected[field] = metadata.get(field)
-                    break
-                
-                new_hist = get_room_history(room_name)
-                if len(new_hist) > hist_len:
-                    user_reply = new_hist[-1]['content']
-                    if validate_fn(user_reply):
-                        collected[field] = user_reply
-                        hist = new_hist
-                        break
-                    else:
+                # Wait for user's next reply/message
+                hist_len = len(hist)
+                retry_count = 0
+                max_retries = 30  # 15 seconds timeout
+
+                while retry_count < max_retries:
+                    await asyncio.sleep(0.5)
+                    retry_count += 1
+
+                    # Check again for new message or metadata update
+                    metadata = getattr(ctx.room, 'metadata', {}) if hasattr(ctx.room, 'metadata') else {}
+                    if isinstance(metadata, str):
                         try:
-                            await asyncio.wait_for(
-                                session.generate_reply(instructions=f"Sorry, that is not a valid {field}, please try again."),
-                                timeout=30.0
-                            )
-                        except (asyncio.TimeoutError, Exception) as e:
-                            logger.warning(f"Failed to send validation error message: {e}")
-                        hist_len = len(new_hist)
-                        retry_count = 0  # reset timeout after invalid input
+                            import json as _json
+                            metadata = _json.loads(metadata)
+                        except Exception:
+                            metadata = {}
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+
+                    if not collected[field] and metadata.get(field):
+                        collected[field] = metadata.get(field)
                         break
+
+                    new_hist = get_room_history(room_name)
+                    if len(new_hist) > hist_len:
+                        user_reply = new_hist[-1]['content']
+                        if validate_fn(user_reply):
+                            collected[field] = user_reply
+                            hist = new_hist
+                            break
+                        else:
+                            try:
+                                await asyncio.wait_for(
+                                    session.generate_reply(instructions=f"Sorry, that is not a valid {field}, please try again."),
+                                    timeout=30.0
+                                )
+                            except (asyncio.TimeoutError, Exception) as e:
+                                logger.warning(f"Failed to send validation error message: {e}")
+                            hist_len = len(new_hist)
+                            retry_count = 0  # reset timeout after invalid input
+                            break
     
     # Upsert customer to CRM
     import json as _json
@@ -473,6 +502,14 @@ async def entrypoint(ctx: agents.JobContext):
 
         user_role = metadata.get('role', 'customer')
         business_id = metadata.get('businessId', '')
+        is_owner = (user_role == 'owner')
+        is_general = (user_role == 'general')
+        
+        # Log metadata for debugging
+        logger.info(f"Agent entrypoint - Room: {ctx.room.name}, Role: {user_role}, BusinessId: {business_id}")
+        logger.debug(f"Metadata keys: {list(metadata.keys()) if isinstance(metadata, dict) else 'not a dict'}")
+        if isinstance(metadata, dict):
+            logger.debug(f"Metadata userName: {metadata.get('userName')}, userEmail: {metadata.get('userEmail')}")
 
         # 2. Fetch business context if we have a businessId
         business_context = {}
@@ -493,16 +530,45 @@ async def entrypoint(ctx: agents.JobContext):
                     import json as _json
                     try:
                         business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
+                        logger.debug(f"Successfully fetched business context for {business_id}: {business_context.get('name', 'unknown')}")
                     except Exception:
                         business_context = {}
+                else:
+                    logger.warning(f"get_business_context returned empty result for businessId: {business_id}")
             except Exception as e:
                 logger.warning(f"Failed to fetch business context: {e}")
+        elif is_owner:
+            # For owners, try to get businessId from metadata or try to resolve it
+            logger.debug("Owner detected but no businessId in metadata, attempting to resolve")
+            # Try to extract from room metadata more thoroughly
+            if isinstance(metadata, dict):
+                # Check for alternative metadata keys
+                alt_business_id = metadata.get('businessId') or metadata.get('business_id') or metadata.get('business')
+                if alt_business_id:
+                    business_id = str(alt_business_id)
+                    # Retry fetching with resolved businessId
+                    try:
+                        from livekit.agents import RunContext
+                        mock_ctx = RunContext()
+                        if hasattr(mock_ctx, 'room'):
+                            try:
+                                mock_ctx.room = ctx.room
+                            except Exception:
+                                pass
+                        business_context_result = await get_business_context(mock_ctx, business_id)
+                        if business_context_result:
+                            import json as _json
+                            try:
+                                business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
+                                logger.debug(f"Successfully fetched business context after resolution: {business_context.get('name', 'unknown')}")
+                            except Exception:
+                                business_context = {}
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch business context after resolution: {e}")
     except Exception as e:
         logger.debug(f"Error preparing metadata/business context: {e}")
 
     # 3. Format the agent instruction with business context
-    is_owner = (user_role == 'owner')
-    is_general = (user_role == 'general')
     agent_config = business_context.get('agentConfig', {}) if isinstance(business_context, dict) else {}
 
     # Evaluate mode first to avoid format string issues
@@ -992,18 +1058,31 @@ async def entrypoint(ctx: agents.JobContext):
                 pass
 
         # 9. Generate initial welcome message (session is now running)
+        # Initialize welcome_msg outside try block to ensure it's always defined
+        welcome_msg = "Hello! I'm Voxa. How can I help you today?"
+        
         try:
-            # Use different instruction based on role
-            welcome_msg = SESSION_INSTRUCTION
             if is_owner:
                 owner_name = owner_info.get('name') if isinstance(owner_info, dict) else None
                 if not owner_name:
-                    # Try to extract from metadata if available
+                    # Try to extract from metadata - check userName first (set by backend)
                     try:
                         md = metadata or {}
-                        owner_name = md.get('ownerName') or md.get('owner') or None
+                        owner_name = md.get('userName') or md.get('ownerName') or md.get('owner') or None
+                        if not owner_name and isinstance(md.get('owner'), dict):
+                            owner_name = md.get('owner', {}).get('name')
                     except Exception:
                         owner_name = None
+                
+                # If still no name, try email from metadata
+                if not owner_name:
+                    try:
+                        md = metadata or {}
+                        owner_email = md.get('userEmail') or md.get('email') or None
+                        if owner_email and isinstance(owner_email, str) and '@' in owner_email:
+                            owner_name = owner_email.split('@', 1)[0]
+                    except Exception:
+                        pass
 
                 if owner_name:
                     welcome_msg = f"Hi {owner_name}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
@@ -1020,19 +1099,100 @@ async def entrypoint(ctx: agents.JobContext):
                 else:
                     welcome_msg = "Hi there! I'm Voxa, your AI assistant. I'm here to help — can I get your name to get started?"
 
-                # If we are in owner mode but didn't find a proper name, try email local-part as friendly fallback
-                if is_owner and (not owner_name or owner_name.strip() == ''):
-                    try:
-                        if isinstance(owner_info, dict) and owner_info.get('email'):
-                            owner_email = owner_info.get('email')
-                            local = owner_email.split('@', 1)[0]
-                            if local:
-                                welcome_msg = f"Hi {local}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
-                    except Exception:
-                        pass
             else:
-                # General users (public)
-                welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+                # General users (public) - try to greet by provided metadata name/email
+                try:
+                    md = metadata or {}
+                    gen_name = md.get('userName') or md.get('name') or None
+                    gen_email = md.get('userEmail') or md.get('email') or None
+                    
+                    # If name not in metadata, try to fetch from backend using email
+                    if not gen_name and gen_email:
+                        try:
+                            # Try to fetch general user profile from backend
+                            import requests as _req
+                            backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+                            api_key = os.getenv('BACKEND_API_KEY', '')
+                            headers = {}
+                            if api_key:
+                                headers["Authorization"] = f"Bearer {api_key}"
+                            
+                            # Try to get general user by email (URL encode the email)
+                            try:
+                                import urllib.parse
+                                encoded_email = urllib.parse.quote(gen_email, safe='')
+                                gen_user_resp = _req.get(
+                                    f"{backend_url}/api/auth/general/user/{encoded_email}",
+                                    headers=headers,
+                                    timeout=5
+                                )
+                                if gen_user_resp.status_code == 200:
+                                    gen_user_data = gen_user_resp.json()
+                                    if gen_user_data.get('name'):
+                                        gen_name = gen_user_data.get('name')
+                                        logger.debug(f"Fetched general user name from backend: {gen_name}")
+                            except Exception as e:
+                                logger.debug(f"Failed to fetch general user by email: {e}")
+                        except Exception:
+                            pass
+                except Exception:
+                    gen_name = None
+                    gen_email = None
+
+                if gen_name:
+                    welcome_msg = f"Hi {gen_name}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
+                elif gen_email:
+                    try:
+                        local = gen_email.split('@', 1)[0]
+                        if local:
+                            welcome_msg = f"Hi {local}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
+                        else:
+                            welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+                    except Exception:
+                        welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+                else:
+                    welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+            
+            logger.info(f"Generated welcome message for {user_role}: {welcome_msg[:100]}...")
+            
+            # Wait for at least one participant to connect before sending welcome
+            # This ensures the user is actually connected and can receive the message
+            max_wait = 10  # Maximum wait time in seconds
+            wait_interval = 0.5  # Check every 0.5 seconds
+            waited = 0
+            participants_connected = False
+            
+            while waited < max_wait:
+                try:
+                    # Check if there are any remote participants (users) connected
+                    if hasattr(ctx.room, 'remote_participants'):
+                        remote_parts = getattr(ctx.room, 'remote_participants', {})
+                        if isinstance(remote_parts, dict) and len(remote_parts) > 0:
+                            participants_connected = True
+                            logger.debug(f"Found {len(remote_parts)} remote participant(s)")
+                            break
+                        elif hasattr(remote_parts, '__len__') and len(remote_parts) > 0:
+                            participants_connected = True
+                            logger.debug("Found remote participants (via __len__)")
+                            break
+                    # Also check participants attribute
+                    if hasattr(ctx.room, 'participants'):
+                        parts = getattr(ctx.room, 'participants', {})
+                        if isinstance(parts, dict):
+                            # Exclude local participant (agent)
+                            remote_count = len([p for p in parts.values() if hasattr(p, 'identity') and 'agent' not in str(p.identity).lower()])
+                            if remote_count > 0:
+                                participants_connected = True
+                                logger.debug(f"Found {remote_count} participant(s) via participants attribute")
+                                break
+                except Exception as e:
+                    logger.debug(f"Error checking participants: {e}")
+                
+                await asyncio.sleep(wait_interval)
+                waited += wait_interval
+            
+            if not participants_connected:
+                logger.warning("No participants connected after waiting, sending welcome message anyway")
             
             # Wrap in timeout to handle LiveKit agent timeout errors gracefully
             try:
@@ -1040,6 +1200,7 @@ async def entrypoint(ctx: agents.JobContext):
                     session.generate_reply(instructions=welcome_msg),
                     timeout=30.0  # 30 second timeout for reply generation
                 )
+                logger.info("Welcome message sent via voice successfully")
             except asyncio.TimeoutError:
                 logger.warning("Initial welcome message generation timed out")
             except Exception as e:
@@ -1047,9 +1208,48 @@ async def entrypoint(ctx: agents.JobContext):
                 if 'timeout' in error_msg or 'timed out' in error_msg:
                     logger.warning(f"Initial welcome message timed out: {e}")
                 else:
-                    raise
-        except Exception:
-            logger.exception('Failed to generate initial reply')
+                    logger.warning(f"Welcome message generation error: {e}")
+        except Exception as e:
+            logger.exception(f'Failed to generate initial reply: {e}')
+            # welcome_msg is already initialized above, so it will always have a value
+
+        # Publish the plain welcome text into the LiveKit data channel so
+        # frontends listening with AgentChatListener receive it as an
+        # immediate chat message. This is best-effort and won't fail the
+        # agent if publishing fails.
+        # IMPORTANT: Always try to publish the welcome message, even if voice generation failed
+        try:
+            import json as _json
+            payload_data = { 'type': 'agent_response', 'text': welcome_msg }
+            payload_json = _json.dumps(payload_data)
+            payload_bytes = payload_json.encode('utf-8')
+            
+            if hasattr(ctx.room, 'local_participant') and getattr(ctx.room, 'local_participant'):
+                local_participant = ctx.room.local_participant
+                try:
+                    # Try publish_data first (standard LiveKit method)
+                    if hasattr(local_participant, 'publish_data'):
+                        await local_participant.publish_data(payload_bytes, reliable=True)
+                        logger.info(f"Published welcome message via publish_data: {welcome_msg[:50]}...")
+                    # Try sendText if available (some LiveKit versions)
+                    elif hasattr(local_participant, 'sendText'):
+                        await local_participant.sendText(welcome_msg, topic='lk.chat')
+                        logger.info(f"Published welcome message via sendText: {welcome_msg[:50]}...")
+                    else:
+                        logger.warning("Local participant has no publish_data or sendText method")
+                except Exception as e:
+                    logger.warning(f"Could not publish welcome message via local_participant: {e}")
+                    # Try alternative: send via room data API if available
+                    try:
+                        if hasattr(ctx.room, 'send_data'):
+                            await ctx.room.send_data(payload_bytes, reliable=True)
+                            logger.info(f"Published welcome message via room.send_data: {welcome_msg[:50]}...")
+                    except Exception as e2:
+                        logger.debug(f"Could not publish via room.send_data either: {e2}")
+            else:
+                logger.warning("No local_participant available to publish welcome message")
+        except Exception as e:
+            logger.warning(f"Exception publishing welcome message: {e}")
 
         # 10. For customers, fetch business context at start
         if user_role == 'customer' and business_id:

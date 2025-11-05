@@ -4,7 +4,7 @@ import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff, Mic } from "lucide-react";
 import { useParams, useNavigate } from "react-router-dom";
-import { customerChat, ownerChat, getLivekitToken, upsertCustomer, getLatestTicket, createTicketForEmail } from "@/lib/api.ts";
+import { customerChat, ownerChat, getLivekitToken, upsertCustomer, getLatestTicket, createTicketForEmail, getOwnerByBusinessId, getGeneralUserByEmail, getCustomerByEmail } from "@/lib/api.ts";
 import { getCustomerRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
@@ -20,11 +20,11 @@ import { LocalParticipant } from "livekit-client";
 const API_BASE = import.meta.env.VITE_API_URL ;
 
 
-const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) => {
+const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => {
   const { slug = "" } = useParams();
   const navigate = useNavigate();
   const [businessId, setBusinessId] = useState<string>("");
-  const [businessName, setBusinessName] = useState<string>("Acme Corp");
+  const [businessName, setBusinessName] = useState<string>("");
   const [isCallActive, setIsCallActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [livekitInfo, setLivekitInfo] = useState<{ token: string; serverUrl: string } | null>(null);
@@ -37,6 +37,22 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
   const [emailUpdates, setEmailUpdates] = useState<boolean>(() => {
     try { return localStorage.getItem('voxa_email_updates') === '1'; } catch { return true; }
   });
+
+  // Determine the effective role to use when a prop isn't provided.
+  // Priority: explicit prop > authenticated owner token > authenticated general token > customer
+  const effectiveRole: 'customer' | 'owner' | 'general' = (() => {
+    try {
+      if (role) return role;
+      // Owner if authenticated with owner token
+      if (localStorage.getItem('voxa_token')) return 'owner';
+      // General only if explicitly authenticated as general
+      if (localStorage.getItem('voxa_general_token')) return 'general';
+    } catch (e) {
+      // ignore
+    }
+    // Default to customer for unauthenticated visitors
+    return 'customer';
+  })();
 
   useEffect(() => {
     // Resolve business via slug param
@@ -53,9 +69,30 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
         // ignore; UI can show generic state
       }
     })();
-  // On mount, if no customerId and we're a customer, start collecting info
-  if (!customerId && role === 'customer') setCollectStep('name');
-  }, [customerId, slug]);
+    // On mount, if no customerId and we're a customer, start collecting info
+    if (!customerId && effectiveRole === 'customer') setCollectStep('name');
+  }, [customerId, slug, effectiveRole]);
+
+  // If an owner is authenticated, attempt to fetch the business name from the owner's businessId
+  useEffect(() => {
+    (async () => {
+      try {
+        if (effectiveRole === 'owner') {
+          const storedBiz = localStorage.getItem('voxa_business_id');
+          const idToUse = businessId || storedBiz;
+          if (idToUse) {
+            const res = await fetch(`${API_BASE}/api/business/${encodeURIComponent(idToUse)}/owner`);
+            if (res.ok) {
+              const d = await res.json();
+              if (d?.name) setBusinessName(String(d.name));
+            }
+          }
+        }
+      } catch (_) {
+        // ignore
+      }
+    })();
+  }, [effectiveRole, businessId]);
 
   async function handleCustomerIdentityInput(input: string): Promise<string> {
     // Simulated decision tree for AI/agent: in real deployment you may merge with LLM backend!
@@ -126,9 +163,112 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
   const handleStartCall = async () => {
     setIsConnecting(true);
     try {
-      // Always generate a fresh token for each connection attempt
-      // This ensures clean reconnection after disconnects
-      const info = await getLivekitToken({ role: role === 'owner' ? 'owner' : 'customer', businessId });
+      // Always fetch fresh user details from the database for all roles
+      // This ensures the agent has access to the latest user data and business context
+      let userName: string | undefined = undefined;
+      let userEmail: string | undefined = undefined;
+      
+      try {
+        if (effectiveRole === 'owner') {
+          // For owners: Always fetch from backend using businessId
+          if (businessId) {
+            try {
+              const ownerData = await getOwnerByBusinessId(businessId);
+              if (ownerData) {
+                userName = ownerData.name || undefined;
+                userEmail = ownerData.email || undefined;
+                // eslint-disable-next-line no-console
+                console.log('[CustomerChat] Fetched owner data from DB:', { userName, userEmail, businessId });
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn('[CustomerChat] Failed to fetch owner from DB, falling back to localStorage:', err);
+              // Fallback to localStorage if DB fetch fails
+              const ou = localStorage.getItem('voxa_user');
+              if (ou) {
+                try {
+                  const parsed = JSON.parse(ou);
+                  userName = parsed?.name || undefined;
+                  userEmail = parsed?.email || undefined;
+                } catch (_) {}
+              }
+            }
+          }
+        } else if (effectiveRole === 'general') {
+          // For general users: Get email from localStorage, then fetch from backend
+          const gu = localStorage.getItem('voxa_general_user');
+          let emailToFetch: string | undefined = undefined;
+          
+          if (gu) {
+            try {
+              const parsed = JSON.parse(gu);
+              emailToFetch = parsed?.email || undefined;
+              // Use cached name as fallback
+              userName = parsed?.name || undefined;
+            } catch (_) {}
+          }
+          
+          if (emailToFetch) {
+            try {
+              const generalUserData = await getGeneralUserByEmail(emailToFetch);
+              if (generalUserData) {
+                userName = generalUserData.name || userName;
+                userEmail = generalUserData.email || emailToFetch;
+                // eslint-disable-next-line no-console
+                console.log('[CustomerChat] Fetched general user data from DB:', { userName, userEmail });
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn('[CustomerChat] Failed to fetch general user from DB:', err);
+            }
+          }
+        } else if (effectiveRole === 'customer') {
+          // For customers: Get email from sessionStorage or pendingCustomerInfo, then fetch from backend
+          let emailToFetch: string | undefined = undefined;
+          
+          // Try to get email from pending customer info first (if collected via form)
+          if (pendingCustomerInfo.email) {
+            emailToFetch = pendingCustomerInfo.email;
+            userName = pendingCustomerInfo.name || userName;
+          } else {
+            // Try to get from sessionStorage (if customer was already created)
+            try {
+              const storedCustomer = sessionStorage.getItem('customerData');
+              if (storedCustomer) {
+                const parsed = JSON.parse(storedCustomer);
+                emailToFetch = parsed?.email || undefined;
+                userName = parsed?.name || userName;
+              }
+            } catch (_) {}
+          }
+          
+          if (emailToFetch && businessId) {
+            try {
+              const customerData = await getCustomerByEmail(emailToFetch, businessId);
+              if (customerData) {
+                userName = customerData.name || userName;
+                userEmail = customerData.email || emailToFetch;
+                // Update customerId if we have it
+                if (customerData._id || customerData.id) {
+                  setCustomerId(customerData._id || customerData.id || null);
+                  sessionStorage.setItem('customerId', customerData._id || customerData.id || '');
+                }
+                // eslint-disable-next-line no-console
+                console.log('[CustomerChat] Fetched customer data from DB:', { userName, userEmail, customerId: customerData._id || customerData.id });
+              }
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn('[CustomerChat] Failed to fetch customer from DB:', err);
+            }
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[CustomerChat] Error fetching user data:', err);
+      }
+
+      const kvRole = effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer');
+      const info = await getLivekitToken({ role: kvRole, businessId, userName, userEmail });
       
       // Clear any stale state
       setLivekitInfo(null);
@@ -141,11 +281,11 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
       setLivekitInfo(info);
       setIsCallActive(true);
       setErrorBanner("");
-      try { localStorage.setItem('voxa_last_session', JSON.stringify({ role, businessId })); } catch {}
+      try { localStorage.setItem('voxa_last_session', JSON.stringify({ role: effectiveRole, businessId })); } catch {}
       
       // If owner is initiating the call, notify backend so agent can fetch
       // customer details and greet them when the room connects.
-      if (role === 'owner') {
+      if (effectiveRole === 'owner') {
         try {
           await ownerChat('call_started', { businessId });
         } catch (e) {
@@ -297,7 +437,7 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
           <img src={voxaLogo} alt={businessName} className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14" />
           <div>
             <h1 className="text-lg sm:text-xl md:text-2xl font-bold">{businessName}</h1>
-            <p className="text-xs sm:text-sm text-muted-foreground">AI Voice Assistant</p>
+            <p className="text-xs sm:text-sm text-muted-foreground">Voice Assistant</p>
           </div>
         </div>
       </header>
@@ -314,7 +454,7 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
               <div>
                 <h2 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2">Start Voice Call</h2>
                 <p className="text-sm sm:text-base text-muted-foreground">
-                  Talk to our AI assistant instantly
+                  Talk to our assistant instantly
                 </p>
               </div>
               <Button
@@ -401,7 +541,7 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
           </div>
           <div className="flex-1">
             <ChatInterface 
-              mode={role === 'owner' ? 'owner' : 'customer'} 
+              mode={effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer')} 
               businessName={businessName} 
               onSend={async (text) => {
                 // Only handle text if call is not active (fallback for when voice is off)
@@ -412,8 +552,8 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
                   return '';
                 }
                 
-                // Owner text intents (lightweight) when call inactive
-                if (role === 'owner') {
+                // Owner text intents (when call inactive) - forward to ownerChat with business/owner context
+                if (effectiveRole === 'owner') {
                   const t = text.toLowerCase();
                   if (t.includes('show') && t.includes('open tickets')) {
                     navigate('/dashboard/tickets');
@@ -439,9 +579,28 @@ const CustomerChat = ({ role = 'customer' }: { role?: 'customer' | 'owner' }) =>
                       return 'Failed to schedule follow-up.';
                     }
                   }
-                  // Otherwise, start the call
-                  await handleStartCall();
-                  return '';
+
+                  // For other owner text, call the ownerChat API with context so the agent can answer using business data
+                  try {
+                    // Build context with businessId and owner profile
+                    let ownerProfile: any = {};
+                    try {
+                      const ou = localStorage.getItem('voxa_user');
+                      if (ou) ownerProfile = JSON.parse(ou);
+                      else {
+                        const oe = localStorage.getItem('voxa_owner_email');
+                        if (oe) ownerProfile.email = oe;
+                      }
+                    } catch (_) {}
+
+                    const context = { businessId, owner: ownerProfile };
+                    const reply = await ownerChat(text, context);
+                    return reply || '';
+                  } catch (e) {
+                    // If ownerChat fails, fallback to starting a call
+                    await handleStartCall();
+                    return '';
+                  }
                 }
                 // For customers without active call, start call
                 await handleStartCall();

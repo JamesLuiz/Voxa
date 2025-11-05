@@ -64,6 +64,7 @@ const Register = () => {
         // Store token and businessId
         localStorage.setItem("voxa_token", result.token || "");
         localStorage.setItem("voxa_business_id", result.businessId || "");
+  try { if ((result as any)?.user) localStorage.setItem('voxa_user', JSON.stringify((result as any).user)); } catch (_) {}
 
         // If SendGrid credentials were provided during registration, save them to backend
         try {

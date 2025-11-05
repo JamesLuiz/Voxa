@@ -12,7 +12,7 @@ interface Message {
 }
 
 interface ChatInterfaceProps {
-  mode: "owner" | "customer";
+  mode: "owner" | "customer" | "general";
   businessName?: string;
   onSend?: (text: string) => Promise<string> | string; // optional backend integration
   onStartVoice?: () => void; // when mic is pressed (used for admin realtime voice)
@@ -28,6 +28,16 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Listen for welcome message when component mounts (if call is active)
+  useEffect(() => {
+    const checkForWelcome = () => {
+      const isCallActive = sessionStorage.getItem('voxa_call_active');
+      // If no messages yet and call is active, welcome message should come via AgentChatListener
+      // This is handled by the AgentChatListener component in CustomerChat.tsx
+    };
+    checkForWelcome();
+  }, []);
 
   // Listen for agent messages from LiveKit
   useEffect(() => {

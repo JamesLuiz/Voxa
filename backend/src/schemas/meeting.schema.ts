@@ -8,8 +8,8 @@ export class Meeting {
   @Prop({ type: Types.ObjectId, ref: 'Business', index: true, required: true })
   businessId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'Customer', index: true, required: true })
-  customerId: Types.ObjectId;
+  @Prop({ type: Types.ObjectId, ref: 'Customer', index: true, required: false })
+  customerId?: Types.ObjectId;
 
   @Prop({ required: true })
   title: string;

@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Users, MessageSquare, Ticket, TrendingUp } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { getAnalyticsSummary } from "@/lib/api.ts";
+import { getAnalyticsSummary, ownerChat } from "@/lib/api.ts";
 import { useEffect, useState } from "react";
 
 const Overview = () => {
@@ -12,12 +12,56 @@ const Overview = () => {
     (async () => {
       try {
         const apiBase = (import.meta as any).env.VITE_API_URL;
-        if (businessId) {
-          const res = await fetch(`${apiBase}/api/business/${businessId}/owner`);
+        let idToQuery = businessId;
+        // If no businessId in localStorage, try backend's resolve endpoint
+        if (!idToQuery) {
+          try {
+            const r = await fetch(`${apiBase}/api/business/resolve`);
+            if (r.ok) {
+              const d = await r.json();
+              idToQuery = d?.businessId || idToQuery;
+              // Store resolved businessId for future use
+              if (idToQuery && typeof window !== 'undefined') {
+                localStorage.setItem('voxa_business_id', idToQuery);
+              }
+            }
+          } catch (_) {}
+        }
+        if (idToQuery) {
+          // Fetch owner info to display name
+          const res = await fetch(`${apiBase}/api/business/${encodeURIComponent(idToQuery)}/owner`);
           if (res.ok) {
             const data = await res.json();
             if (data?.name) setOwnerName(String(data.name));
           }
+
+          // Fetch full business context to ensure agent has access to all business details
+          try {
+            const contextRes = await fetch(`${apiBase}/api/business/context/${encodeURIComponent(idToQuery)}`);
+            if (contextRes.ok) {
+              const contextData = await contextRes.json();
+              // Store business context in localStorage so agent can access it
+              if (typeof window !== 'undefined' && contextData) {
+                localStorage.setItem('voxa_business_context', JSON.stringify(contextData));
+              }
+            }
+          } catch (_) {}
+
+          // Notify AI backend that the owner's dashboard has opened so the agent
+          // can preload business/owner context. Only do this when authenticated
+          // as an owner (voxa_token present).
+          try {
+            const token = typeof window !== 'undefined' ? localStorage.getItem('voxa_token') : null;
+            if (token) {
+              // Best-effort; any errors are ignored
+              // Pass full context including owner info
+              await ownerChat('dashboard_opened', { 
+                businessId: idToQuery,
+                action: 'dashboard_mounted',
+                timestamp: new Date().toISOString()
+              });
+            }
+          } catch (_) {}
         }
       } catch {
         /* ignore */

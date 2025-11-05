@@ -21,10 +21,12 @@ const GeneralLogin = () => {
         body: JSON.stringify({ email }),
       });
       if (!res.ok) throw new Error('Login failed');
-      const data = await res.json();
-      localStorage.setItem('voxa_general_token', data.token || '');
+  const data = await res.json();
+  localStorage.setItem('voxa_general_token', data.token || '');
+  // Persist general user profile so UI/agent can greet by name
+  try { if (data.user) localStorage.setItem('voxa_general_user', JSON.stringify(data.user)); } catch (_) {}
       toast.success('Logged in');
-      navigate('/');
+      navigate('/general-chat');
     } catch (e) {
       toast.error('Login failed');
     } finally {

@@ -20,6 +20,17 @@ import GeneralLogin from "./pages/GeneralLogin";
 import NotFound from "./pages/NotFound";
 import Settings from "./pages/Settings";
 
+// Protected route for general chat - requires authentication
+const GeneralChatProtected = () => {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('voxa_general_token') : null;
+  if (!token) {
+    // Redirect to general login if not authenticated
+    window.location.href = '/general/login';
+    return null;
+  }
+  return <CustomerChat role="general" />;
+};
+
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -45,7 +56,7 @@ const App = () => (
             <Route path="settings" element={<Settings />} />
           </Route>
           <Route path="/chat/:slug" element={<CustomerChat />} />
-          <Route path="/general-chat/:slug" element={<CustomerChat role="customer" />} />
+          <Route path="/general-chat" element={<GeneralChatProtected />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>

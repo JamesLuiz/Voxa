@@ -28,6 +28,8 @@ export class AppController {
   async getLivekitToken(
     @Query('role') role: string,
     @Query('businessId') businessId: string,
+  @Query('userName') userName?: string,
+  @Query('userEmail') userEmail?: string,
     @Headers('authorization') authHeader?: string
   ) {
     // Extract businessId from JWT token if owner and not provided in query
@@ -59,6 +61,9 @@ export class AppController {
     if (extractedBusinessId) {
       metadata.businessId = extractedBusinessId;
     }
+  // Include user info if provided so agent can greet by name when joining
+  if (userName) metadata.userName = userName;
+  if (userEmail) metadata.userEmail = userEmail;
     
     // Ensure room exists with metadata
     await this.liveKitService.createRoom(roomName, metadata);

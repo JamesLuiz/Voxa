@@ -23,7 +23,8 @@ const Login = () => {
       // Store owner email if available for "My" filters
       try {
         const parsed: any = res as any;
-        if (parsed?.user?.email) localStorage.setItem("voxa_owner_email", String(parsed.user.email));
+  if (parsed?.user?.email) localStorage.setItem("voxa_owner_email", String(parsed.user.email));
+  if (parsed?.user) localStorage.setItem('voxa_user', JSON.stringify(parsed.user));
       } catch (_) {}
       toast.success("Logged in");
       navigate("/dashboard");

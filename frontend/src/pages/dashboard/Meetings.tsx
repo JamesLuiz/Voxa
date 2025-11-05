@@ -7,14 +7,22 @@ import { listMeetings, createMeeting } from "@/lib/api.ts";
 
 const Meetings = () => {
   const qc = useQueryClient();
+  const businessId = typeof window !== 'undefined' ? localStorage.getItem('voxa_business_id') || undefined : undefined;
   const [date, setDate] = useState("");
-  const { data, isLoading } = useQuery({ queryKey: ["meetings", date], queryFn: () => listMeetings(date ? { from: date } : undefined) });
+  const { data, isLoading, error } = useQuery({ 
+    queryKey: ["meetings", businessId, date], 
+    queryFn: () => listMeetings(date ? { from: date } : undefined),
+    enabled: !!businessId, // Only fetch if businessId exists
+    refetchOnMount: true,
+    refetchOnWindowFocus: true,
+  });
   const [form, setForm] = useState({ title: "", startsAt: "", with: "" });
   const mutation = useMutation({
     mutationFn: () => createMeeting(form),
     onSuccess: () => {
       setForm({ title: "", startsAt: "", with: "" });
       qc.invalidateQueries({ queryKey: ["meetings"] });
+      qc.refetchQueries({ queryKey: ["meetings", businessId] });
     },
   });
 
@@ -62,21 +70,50 @@ const Meetings = () => {
             <Card key={i} className="glass h-28" />
           ))}
         </div>
+      ) : error ? (
+        <div className="text-center p-8 text-muted-foreground">
+          <p>Error loading meetings: {error instanceof Error ? error.message : 'Unknown error'}</p>
+        </div>
+      ) : !data || (Array.isArray(data) && data.length === 0) ? (
+        <div className="text-center p-8 text-muted-foreground">
+          <p>No meetings scheduled yet. Create one above to get started.</p>
+        </div>
       ) : (
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
-          {(data?.items || data || []).map((m: any) => (
-            <Card key={m.id} className="glass">
-              <CardHeader>
-                <CardTitle className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
-                  <span className="text-base sm:text-lg break-words">{m.title}</span>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">{new Date(m.startsAt).toLocaleString()}</span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="text-sm text-muted-foreground">
-                With: {m.with || "N/A"}
-              </CardContent>
-            </Card>
-          ))}
+          {(Array.isArray(data) ? data : []).map((m: any) => {
+            // Backend now provides normalized data with id, startsAt, and with fields
+            const meetingId = m.id || m._id || `meeting-${Math.random()}`;
+            const startTime = m.startsAt || m.startTime;
+            
+            // Format date safely
+            let formattedDate = "TBD";
+            try {
+              if (startTime) {
+                const date = new Date(startTime);
+                if (!isNaN(date.getTime())) {
+                  formattedDate = date.toLocaleString();
+                }
+              }
+            } catch (e) {
+              formattedDate = "Invalid Date";
+            }
+            
+            return (
+              <Card key={meetingId} className="glass">
+                <CardHeader>
+                  <CardTitle className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2">
+                    <span className="text-base sm:text-lg break-words">{m.title || "Untitled Meeting"}</span>
+                    <span className="text-xs text-muted-foreground whitespace-nowrap">{formattedDate}</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm text-muted-foreground">
+                  <div>With: {m.with || "N/A"}</div>
+                  {m.duration && <div className="mt-1">Duration: {m.duration} minutes</div>}
+                  {m.status && <div className="mt-1 capitalize">Status: {m.status}</div>}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       )}
     </div>

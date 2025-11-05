@@ -24,9 +24,10 @@ const GeneralRegister = () => {
       });
       if (!res.ok) throw new Error('Registration failed');
       const data = await res.json();
-      localStorage.setItem('voxa_general_token', data.token || '');
+  localStorage.setItem('voxa_general_token', data.token || '');
+  try { if (data.user) localStorage.setItem('voxa_general_user', JSON.stringify(data.user)); } catch (_) {}
       toast.success('Registered');
-      navigate('/');
+      navigate('/general-chat');
     } catch (e) {
       toast.error('Registration failed');
     } finally {

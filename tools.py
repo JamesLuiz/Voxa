@@ -3,6 +3,7 @@ from livekit.agents import function_tool, RunContext
 import requests
 from langchain_community.tools import DuckDuckGoSearchRun
 import os
+import time
 from typing import Optional
 
 # Configure logger for this module
@@ -332,42 +333,106 @@ async def schedule_meeting(
     title: str,
     start_time: str,
     duration_minutes: int = 30,
-    attendees: Optional[str] = None
+    attendees: Optional[str] = None,
+    customer_id: Optional[str] = None
 ) -> str:
     """
     Schedule a meeting or appointment.
     
     Args:
         title: Meeting title
-        start_time: Meeting start time (ISO format)
+        start_time: Meeting start time (ISO format or datetime string)
         duration_minutes: Meeting duration in minutes
-        attendees: Comma-separated list of attendee emails
+        attendees: Comma-separated list of attendee emails or names
+        customer_id: Optional customer ID if meeting is with a specific customer
     """
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        headers = {}
+        api_key = os.getenv('BACKEND_API_KEY', '')
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         
+        # Extract businessId from context if available
+        business_id = None
+        if context:
+            try:
+                if hasattr(context, 'room') and context.room:
+                    room_meta = getattr(context.room, 'metadata', {}) if hasattr(context.room, 'metadata') else {}
+                    if isinstance(room_meta, str):
+                        import json as _json
+                        try:
+                            room_meta = _json.loads(room_meta)
+                        except:
+                            room_meta = {}
+                    if isinstance(room_meta, dict) and room_meta.get('businessId'):
+                        business_id = room_meta.get('businessId')
+            except Exception:
+                pass
+        
+        if not business_id:
+            return "Error: Business ID is required to schedule a meeting. Please ensure you're connected with business context."
+        
+        # Parse attendees if provided
+        attendees_list = []
+        if attendees:
+            if isinstance(attendees, str):
+                attendees_list = [a.strip() for a in attendees.split(",") if a.strip()]
+            elif isinstance(attendees, list):
+                attendees_list = attendees
+        
+        # If customer_id is provided, use it; otherwise create a placeholder or use first attendee
+        # Backend requires customerId, so we need to provide something
+        customer_id_to_use = customer_id
+        if not customer_id_to_use and attendees_list:
+            # Try to look up customer by email if first attendee is an email
+            first_attendee = attendees_list[0]
+            if '@' in first_attendee:
+                try:
+                    # Try to find customer by email
+                    customer_resp = requests.get(
+                        f"{backend_url}/api/crm/customers/email/{first_attendee}",
+                        params={"businessId": business_id},
+                        headers=headers,
+                        timeout=5
+                    )
+                    if customer_resp.status_code == 200:
+                        customer_data = customer_resp.json()
+                        customer_id_to_use = customer_data.get('_id') or customer_data.get('id')
+                except Exception:
+                    pass
+        
+        # Build meeting data - customerId is now optional for owner-initiated meetings
         meeting_data = {
+            "businessId": business_id,
             "title": title,
             "startTime": start_time,
             "duration": duration_minutes,
-            "attendees": attendees.split(",") if attendees else [],
-            "status": "confirmed"
+            "attendees": attendees_list,
+            "status": "scheduled"
         }
+        
+        # Only include customerId if we found one (owner-initiated meetings don't require it)
+        if customer_id_to_use:
+            meeting_data["customerId"] = customer_id_to_use
         
         response = requests.post(
             f"{backend_url}/api/meetings",
             json=meeting_data,
-            headers={"Authorization": f"Bearer {os.getenv('BACKEND_API_KEY', '')}"},
+            headers=headers,
             timeout=10
         )
         
         if response.status_code == 200 or response.status_code == 201:
             meeting = response.json()
-            logger.debug(f"Created meeting: {meeting.get('_id')}")
-            return f"Meeting scheduled successfully: {title} at {start_time}"
+            meeting_id = meeting.get('_id') or meeting.get('id')
+            logger.info(f"Created meeting: {meeting_id}")
+            attendee_str = ", ".join(attendees_list) if attendees_list else "No attendees specified"
+            return f"Meeting '{title}' scheduled successfully for {start_time} with {attendee_str}. Meeting ID: {meeting_id}"
         else:
-            logger.warning(f"Failed to create meeting: {response.status_code}")
-            return "Failed to schedule meeting"
+            error_text = response.text
+            logger.warning(f"Failed to create meeting: {response.status_code} - {error_text}")
+            return f"Failed to schedule meeting: {error_text}"
             
     except Exception as e:
         logger.warning(f"Error scheduling meeting: {e}")

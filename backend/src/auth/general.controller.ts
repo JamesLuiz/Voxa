@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as jwt from 'jsonwebtoken';
@@ -43,6 +43,13 @@ export class GeneralAuthController {
     }
     const token = jwt.sign({ sub: email, role: 'general', userId: String((user as any)._id) }, process.env.JWT_SECRET || 'change-me', { expiresIn: '30d' });
     return { token, user: { name: user.name, email, role: 'general', location: user.location } };
+  }
+
+  @Get('user/:email')
+  async getUserByEmail(@Param('email') email: string) {
+    const user = await this.generalModel.findOne({ email: String(email).trim().toLowerCase() }).lean();
+    if (!user) return {};
+    return { name: user.name, email: user.email, location: user.location };
   }
 }
 

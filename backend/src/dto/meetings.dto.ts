@@ -2,7 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateMeetingDto {
   @ApiProperty() businessId: string;
-  @ApiProperty() customerId: string;
+  @ApiProperty({ required: false }) customerId?: string;
   @ApiProperty() title: string;
   @ApiProperty() startTime: string;
   @ApiProperty({ required: false }) duration?: number;

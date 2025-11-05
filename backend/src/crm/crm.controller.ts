@@ -69,8 +69,8 @@ export class CrmController {
   @Post('email/:email/conversations')
   async appendConversationByEmail(
     @Param('email') email: string,
-    @Query('businessId') businessId?: string,
     @Body() body: { role: 'user' | 'assistant'; content: string; timestamp?: string | Date },
+    @Query('businessId') businessId?: string,
   ) {
     const filter: any = { email: String(email).trim().toLowerCase() };
     if (businessId) filter.businessId = new Types.ObjectId(businessId);
