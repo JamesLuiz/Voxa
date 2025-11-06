@@ -268,7 +268,12 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
       }
 
   const kvRole = effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer');
-      const info = await getLivekitToken({ role: kvRole, businessId, userName, userEmail });
+      const info = await getLivekitToken({
+        role: kvRole,
+        businessId,
+        userName,
+        userEmail,
+      });
       
       // Clear any stale state
       setLivekitInfo(null);

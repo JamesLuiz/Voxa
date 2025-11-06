@@ -75,9 +75,6 @@ const ChatInterface = ({ mode, businessName, onSend, onStartVoice }: ChatInterfa
     setInput("");
     setIsTyping(true);
     try {
-      // For owner mode we do NOT auto-start the voice session when sending text.
-      // Owners can use the voice recording button to open voice. We still call onStartVoice
-      // when recording is toggled elsewhere.
       // If a call is active, send text via LiveKit data channel directly
       const isCallActive = sessionStorage.getItem('voxa_call_active');
       if (isCallActive) {

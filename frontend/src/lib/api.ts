@@ -116,11 +116,15 @@ export async function getCustomerByEmail(email: string, businessId: string) {
   return (await res.json()) as { name?: string; email?: string; _id?: string; id?: string } | null;
 }
 
-export async function getLivekitToken(params: { role: "customer" | "owner" | "general"; businessId?: string; userName?: string; userEmail?: string }) {
+export async function getLivekitToken(params: { role: "customer" | "owner" | "general"; businessId?: string; userName?: string; userEmail?: string; metadata?: Record<string, any> }) {
   const token = localStorage.getItem("voxa_token") || localStorage.getItem('voxa_general_token') || "";
   const qs: Record<string, string> = { role: params.role, businessId: params.businessId || "" };
   if (params.userName) qs.userName = params.userName;
   if (params.userEmail) qs.userEmail = params.userEmail;
+  // Optionally include metadata in query for future backend parsing
+  if (params.metadata) {
+    try { qs.metadata = encodeURIComponent(JSON.stringify(params.metadata)); } catch {}
+  }
   const query = new URLSearchParams(qs).toString();
   const res = await fetch(`${API_BASE}/api/livekit/token?${query}`, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},

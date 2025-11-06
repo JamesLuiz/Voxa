@@ -289,6 +289,23 @@ async def entrypoint(ctx: agents.JobContext):
         if not isinstance(metadata, dict):
             metadata = {}
 
+        # Merge participant attributes (if available) into metadata for role/name/email/businessId
+        try:
+            if hasattr(ctx.room, 'remote_participants') and isinstance(getattr(ctx.room, 'remote_participants'), dict):
+                first_participant = None
+                for _pid, _p in getattr(ctx.room, 'remote_participants').items():
+                    first_participant = _p
+                    break
+                if first_participant is not None:
+                    attrs = getattr(first_participant, 'attributes', None)
+                    if isinstance(attrs, dict):
+                        # Only fill keys that aren't already present in metadata
+                        for k in ('role', 'businessId', 'userName', 'userEmail'):
+                            if k not in metadata and k in attrs and attrs[k] is not None:
+                                metadata[k] = attrs[k]
+        except Exception:
+            pass
+
         user_role = metadata.get('role', 'customer')
         business_id = metadata.get('businessId', '') or metadata.get('business_id', '') or metadata.get('business', '')
         is_owner = (user_role == 'owner')

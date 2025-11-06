@@ -22,12 +22,19 @@ export class LiveKitService {
   ): Promise<string> {
     const at = new AccessToken(this.apiKey, this.apiSecret, {
       identity: participantName,
-    });
-
-    // Set metadata if provided
-    if (metadata) {
-      at.metadata = JSON.stringify(metadata);
-    }
+      // Expose participant display name when available
+      // @ts-ignore - name is supported by livekit-server-sdk
+      name: (metadata && (metadata.userName || metadata.name)) || 'Guest',
+      // Participant attributes for agents to read
+      // Newer SDKs support attributes; fall back is harmless if ignored
+      // @ts-ignore - attributes may not be in older type defs
+      attributes: {
+        role: (metadata && (metadata.userRole || metadata.role)) || 'customer',
+        businessId: metadata ? (metadata.businessId || metadata.business_id || metadata.business) : undefined,
+        userName: metadata ? (metadata.userName || metadata.name) : undefined,
+        userEmail: metadata ? (metadata.userEmail || metadata.email) : undefined,
+      },
+    } as any);
 
     at.addGrant({
       roomJoin: true,
