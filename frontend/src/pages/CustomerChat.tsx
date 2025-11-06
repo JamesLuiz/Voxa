@@ -29,6 +29,8 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
   const [isConnecting, setIsConnecting] = useState(false);
   const [livekitInfo, setLivekitInfo] = useState<{ token: string; serverUrl: string } | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(() => sessionStorage.getItem('customerId'));
+  const [currentUserName, setCurrentUserName] = useState<string | undefined>(undefined);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | undefined>(undefined);
   const [collectStep, setCollectStep] = useState<'none'|'name'|'email'|'phone'|'done'>('none');
   const [pendingCustomerInfo, setPendingCustomerInfo] = useState<{name?: string; email?: string; phone?: string}>({});
   const [errorBanner, setErrorBanner] = useState<string>("");
@@ -268,11 +270,42 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
       }
 
   const kvRole = effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer');
+      // Generate/persist a session id so customers/general users get isolated rooms
+      const getOrCreateSessionId = () => {
+        try {
+          let sid = sessionStorage.getItem('voxa_session_id');
+          if (!sid) {
+            // Use timestamp-random for broad compatibility
+            sid = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+            sessionStorage.setItem('voxa_session_id', sid);
+            sessionStorage.setItem('voxa_session_timestamp', String(Date.now()));
+          }
+          return sid;
+        } catch {
+          return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        }
+      };
+
+      const sessionId = getOrCreateSessionId();
+
+      // Persist the resolved identity for announcer
+      setCurrentUserName(userName);
+      setCurrentUserEmail(userEmail);
+
       const info = await getLivekitToken({
         role: kvRole,
         businessId,
         userName,
         userEmail,
+        sessionId,
+        metadata: {
+          userRole: kvRole,
+          businessId,
+          userName: userName || 'Guest',
+          userEmail: userEmail || '',
+          sessionId,
+          timestamp: Date.now(),
+        },
       });
       
       // Clear any stale state
@@ -508,6 +541,12 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
                       }
                     }}
                   >
+                    <RoleContextAnnouncer 
+                      role={effectiveRole === 'owner' ? 'owner' : (effectiveRole === 'general' ? 'general' : 'customer')} 
+                      businessId={businessId} 
+                      userName={currentUserName} 
+                      userEmail={currentUserEmail} 
+                    />
                     <PublishPendingText />
                     <AgentChatListener onMessage={(msg) => {
                       // Update chat interface with agent messages
@@ -628,6 +667,64 @@ const CustomerChat = ({ role }: { role?: 'customer' | 'owner' | 'general' }) => 
 };
 
 export default CustomerChat;
+
+function RoleContextAnnouncer({ role, businessId, userName, userEmail }: { role: 'owner'|'customer'|'general'; businessId?: string; userName?: string; userEmail?: string }) {
+  const room = useRoomContext();
+  useEffect(() => {
+    if (!room) return;
+
+    let sent = false;
+    const announce = async () => {
+      try {
+        if (!room || (room as any)?.state !== 'connected') return;
+        if (sent) return;
+        const lp = (room as any)?.localParticipant as any;
+        if (!lp) return;
+        const payload = {
+          type: 'role_context',
+          context: {
+            role,
+            businessId: businessId || '',
+            userName: userName || 'Guest',
+            userEmail: userEmail || '',
+            sessionId: sessionStorage.getItem('voxa_session_id') || '',
+          }
+        };
+        const json = JSON.stringify(payload);
+        if (typeof lp.sendText === 'function') {
+          await lp.sendText(json, { topic: 'lk.chat' });
+        } else if (typeof lp.publishData === 'function') {
+          const enc = new TextEncoder().encode(json);
+          await lp.publishData(enc, DataPacket_Kind.RELIABLE);
+        }
+        sent = true;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('Failed to announce role context', e);
+      }
+    };
+
+    const maybeAnnounce = () => {
+      if (room && (room as any)?.state === 'connected') announce();
+    };
+
+    if (typeof (room as any).on === 'function') {
+      (room as any).on('connected', maybeAnnounce);
+      (room as any).on('reconnected', maybeAnnounce);
+    }
+    // Try immediately too
+    maybeAnnounce();
+
+    return () => {
+      if (typeof (room as any).off === 'function') {
+        (room as any).off('connected', maybeAnnounce);
+        (room as any).off('reconnected', maybeAnnounce);
+      }
+    };
+  }, [room, role, businessId, userName, userEmail]);
+
+  return null;
+}
 
 function PublishPendingText() {
   const room = useRoomContext();

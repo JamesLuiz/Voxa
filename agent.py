@@ -208,6 +208,8 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
 async def entrypoint(ctx: agents.JobContext):
     logger.debug(f"Agent joining room: {ctx.room.name}")
     session = None
+    # Allow runtime overrides provided via data channel (e.g., role_context)
+    runtime_overrides: dict = {}
     
     try:
         # Setup disconnect handler to clean up properly
@@ -305,6 +307,15 @@ async def entrypoint(ctx: agents.JobContext):
                                 metadata[k] = attrs[k]
         except Exception:
             pass
+
+        # Apply any runtime overrides received from data channel
+        if isinstance(runtime_overrides, dict) and runtime_overrides:
+            try:
+                for k, v in runtime_overrides.items():
+                    if v is not None:
+                        metadata[k] = v
+            except Exception:
+                pass
 
         user_role = metadata.get('role', 'customer')
         business_id = metadata.get('businessId', '') or metadata.get('business_id', '') or metadata.get('business', '')
@@ -465,6 +476,12 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception:
             pass
 
+    # Always include session onboarding instruction in the assistant's system prompt
+    try:
+        formatted_instruction = f"{formatted_instruction}\n\n{SESSION_INSTRUCTION}"
+    except Exception:
+        pass
+
     # 4. Create the session
     session = AgentSession()
 
@@ -582,6 +599,32 @@ async def entrypoint(ctx: agents.JobContext):
                     obj = None
 
                 if obj:
+                    # Handle role_context messages to override runtime metadata
+                    if obj.get('type') == 'role_context' and isinstance(obj.get('context'), dict):
+                        try:
+                            runtime_overrides.update(obj.get('context'))
+                            # Also try to update room metadata for consistency
+                            try:
+                                import json as _json
+                                merged = dict(getattr(ctx.room, 'metadata', {}) or {})
+                                if isinstance(merged, str):
+                                    try:
+                                        merged = _json.loads(merged)
+                                    except Exception:
+                                        merged = {}
+                                for k, v in runtime_overrides.items():
+                                    merged[k] = v
+                                if hasattr(ctx.room, 'set_metadata'):
+                                    try:
+                                        await ctx.room.set_metadata(_json.dumps(merged))
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                        # No user text to process in this message
+                        return
                     if obj.get('type') == 'text_message' and obj.get('text'):
                         text = obj.get('text')
                     elif obj.get('text'):

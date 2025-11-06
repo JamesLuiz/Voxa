@@ -30,6 +30,8 @@ export class AppController {
     @Query('businessId') businessId: string,
   @Query('userName') userName?: string,
   @Query('userEmail') userEmail?: string,
+  @Query('sessionId') sessionId?: string,
+  @Query('metadata') metadataParam?: string,
     @Headers('authorization') authHeader?: string
   ) {
     // Extract businessId from JWT token if owner and not provided in query
@@ -49,7 +51,8 @@ export class AppController {
     // Use a unique identity per request to avoid conflicts with previous
     // participants who may not have fully left the room. This helps when
     // users refresh or rejoin quickly.
-    const roomName = extractedBusinessId || (role === 'owner' ? 'owner-room' : 'default-room');
+    // Build session-aware room name
+    let roomName = 'default-room';
     const baseIdentity = role || 'guest';
     const suffix = Math.random().toString(36).slice(2, 7);
     const identity = `${baseIdentity}-${suffix}`;
@@ -61,15 +64,39 @@ export class AppController {
     if (extractedBusinessId) {
       metadata.businessId = extractedBusinessId;
     }
-  // Include user info if provided so agent can greet by name when joining
-  if (userName) metadata.userName = userName;
-  if (userEmail) metadata.userEmail = userEmail;
+    // Include user info if provided so agent can greet by name when joining
+    if (userName) metadata.userName = userName;
+    if (userEmail) metadata.userEmail = userEmail;
+    if (sessionId) (metadata as any).sessionId = sessionId;
+    // Merge optional metadata param from query if present
+    if (metadataParam) {
+      try {
+        const parsed = JSON.parse(decodeURIComponent(metadataParam));
+        if (parsed && typeof parsed === 'object') {
+          Object.assign(metadata, parsed);
+        }
+      } catch (_) {
+        // ignore bad metadata
+      }
+    }
+
+    // Determine room naming based on role and session
+    if ((role || '').toLowerCase() === 'owner') {
+      // One room per business owner context
+      roomName = extractedBusinessId ? `owner-${extractedBusinessId}` : `owner-room`;
+    } else if ((role || '').toLowerCase() === 'general') {
+      roomName = `general-session-${sessionId || Date.now()}`;
+    } else {
+      // customers
+      const biz = extractedBusinessId || 'general';
+      roomName = `${biz}-session-${sessionId || Date.now()}`;
+    }
     
     // Ensure room exists with metadata
     await this.liveKitService.createRoom(roomName, metadata);
     
     const token = await this.liveKitService.createToken(roomName, identity, metadata);
-    return { token, serverUrl: process.env.LIVEKIT_URL };
+    return { token, serverUrl: process.env.LIVEKIT_URL, roomName };
   }
 
   @Post('/rooms/create')
