@@ -3,9 +3,8 @@ import ChatInterface from "@/components/ChatInterface";
 import voxaLogo from "@/assets/voxa-logo.png";
 import { Button } from "@/components/ui/button";
 import { Phone, PhoneOff } from "lucide-react";
-import { useParams, useNavigate } from "react-router-dom";
-import { customerChat, getLivekitToken, upsertCustomer, getLatestTicket, createTicketForEmail, getCustomerByEmail } from "@/lib/api.ts";
-import { getCustomerRoomUrl } from "@/lib/livekit";
+import { getLivekitToken, getGeneralUserByEmail } from "@/lib/api.ts";
+import { getGeneralRoomUrl } from "@/lib/livekit";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
@@ -17,110 +16,16 @@ import "@livekit/components-styles";
 import { GridLayout, ParticipantTile, TrackToggle, useRoomContext } from "@livekit/components-react";
 import { Track, DataPacket_Kind } from "livekit-client";
 import { LocalParticipant } from "livekit-client";
-const API_BASE = import.meta.env.VITE_API_URL ;
 
 
-const CustomerChat = () => {
-  const { slug = "" } = useParams();
-  const navigate = useNavigate();
-  const [businessId, setBusinessId] = useState<string>("");
-  const [businessName, setBusinessName] = useState<string>("");
+const GeneralChat = () => {
   const [isCallActive, setIsCallActive] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [livekitInfo, setLivekitInfo] = useState<{ token: string; serverUrl: string } | null>(null);
-  const [customerId, setCustomerId] = useState<string | null>(() => sessionStorage.getItem('customerId'));
   const [currentUserName, setCurrentUserName] = useState<string | undefined>(undefined);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | undefined>(undefined);
-  const [collectStep, setCollectStep] = useState<'none'|'name'|'email'|'phone'|'done'>('none');
-  const [pendingCustomerInfo, setPendingCustomerInfo] = useState<{name?: string; email?: string; phone?: string}>({});
   const [errorBanner, setErrorBanner] = useState<string>("");
   const [reconnectOffer, setReconnectOffer] = useState<boolean>(false);
-  const [ticketBanner, setTicketBanner] = useState<{ id: string } | null>(null);
-  const [emailUpdates, setEmailUpdates] = useState<boolean>(() => {
-    try { return localStorage.getItem('voxa_email_updates') === '1'; } catch { return true; }
-  });
-
-  useEffect(() => {
-    // Resolve business via slug param
-    (async () => {
-      if (!slug) return;
-      try {
-        const res = await fetch(`${API_BASE}/api/business/by-slug/${encodeURIComponent(slug)}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data?.businessId) setBusinessId(data.businessId);
-          if (data?.name) setBusinessName(String(data.name));
-        }
-      } catch {
-        // ignore; UI can show generic state
-      }
-    })();
-    // On mount, if no customerId, start collecting info
-    if (!customerId) setCollectStep('name');
-  }, [customerId, slug]);
-
-  async function handleCustomerIdentityInput(input: string): Promise<string> {
-    if (collectStep === 'name') {
-      setPendingCustomerInfo((prev) => ({ ...prev, name: input.trim() }));
-      setCollectStep('email');
-      return "Thanks! Could you share your email address? You'll get updates there.";
-    } else if (collectStep === 'email') {
-      const valid = /^\S+@\S+\.\S+$/.test(input.trim());
-      if (!valid) return "Hmm, that email doesn't look right. Try again (example: you@site.com).";
-      setPendingCustomerInfo((prev) => ({ ...prev, email: input.trim() }));
-      setCollectStep('phone');
-      return "Optional: Share your phone number, or type 'skip'.";
-    } else if (collectStep === 'phone') {
-      const phoneValue = input.trim().toLowerCase() === 'skip' ? '' : input.trim();
-      const finalInfo = { ...pendingCustomerInfo, phone: phoneValue };
-      setPendingCustomerInfo(finalInfo);
-      setCollectStep('done');
-      try {
-        const res: any = await upsertCustomer({
-          businessId,
-          name: finalInfo.name || '',
-          email: finalInfo.email || '',
-          phone: finalInfo.phone || '',
-        });
-        const _id = res?._id || res?.id || null;
-        if (_id) {
-          setCustomerId(_id);
-          sessionStorage.setItem('customerId', _id);
-        }
-        // Ensure a ticket exists for this customer
-        try {
-          if (finalInfo.email) {
-            const created = await createTicketForEmail({
-              businessId,
-              customerEmail: finalInfo.email,
-              title: 'Support Request',
-            });
-            const tId = created?.ticket?._id || created?._id || created?.id;
-            if (tId) {
-              setTicketBanner({ id: String(tId) });
-            } else {
-              const t = await getLatestTicket(businessId, finalInfo.email);
-              if (t && (t._id || t.id)) {
-                setTicketBanner({ id: String(t._id || t.id) });
-              }
-            }
-          }
-        } catch {}
-        return "You're all set! I've saved your details and opened a support ticket.";
-      } catch (err) {
-        setCollectStep('none');
-        return "Sorry, we could not save your info. Please try again later.";
-      }
-    }
-    return "";
-  }
-
-  function getAiPromptForStep() {
-    if (collectStep === 'name') return "Welcome! What's your name?";
-    if (collectStep === 'email') return "Great, what's your email? I'll use it for updates.";
-    if (collectStep === 'phone') return "Phone is optional. You can enter it now or type 'skip'.";
-    return null;
-  }
 
   const handleStartCall = async () => {
     setIsConnecting(true);
@@ -128,37 +33,28 @@ const CustomerChat = () => {
       let userName: string | undefined = undefined;
       let userEmail: string | undefined = undefined;
       
-      // For customers: Get email from sessionStorage or pendingCustomerInfo, then fetch from backend
+      // For general users: Get email from localStorage, then fetch from backend
+      const gu = localStorage.getItem('voxa_general_user');
       let emailToFetch: string | undefined = undefined;
       
-      if (pendingCustomerInfo.email) {
-        emailToFetch = pendingCustomerInfo.email;
-        userName = pendingCustomerInfo.name || userName;
-      } else {
+      if (gu) {
         try {
-          const storedCustomer = sessionStorage.getItem('customerData');
-          if (storedCustomer) {
-            const parsed = JSON.parse(storedCustomer);
-            emailToFetch = parsed?.email || undefined;
-            userName = parsed?.name || userName;
-          }
+          const parsed = JSON.parse(gu);
+          emailToFetch = parsed?.email || undefined;
+          userName = parsed?.name || undefined;
         } catch (_) {}
       }
       
-      if (emailToFetch && businessId) {
+      if (emailToFetch) {
         try {
-          const customerData = await getCustomerByEmail(emailToFetch, businessId);
-          if (customerData) {
-            userName = customerData.name || userName;
-            userEmail = customerData.email || emailToFetch;
-            if (customerData._id || customerData.id) {
-              setCustomerId(customerData._id || customerData.id || null);
-              sessionStorage.setItem('customerId', customerData._id || customerData.id || '');
-            }
+          const generalUserData = await getGeneralUserByEmail(emailToFetch);
+          if (generalUserData) {
+            userName = generalUserData.name || userName;
+            userEmail = generalUserData.email || emailToFetch;
           }
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('[CustomerChat] Failed to fetch customer from DB:', err);
+          console.warn('[GeneralChat] Failed to fetch general user from DB:', err);
         }
       }
 
@@ -182,15 +78,12 @@ const CustomerChat = () => {
       setCurrentUserEmail(userEmail);
 
       const info = await getLivekitToken({
-        role: 'customer',
-        businessId,
+        role: 'general',
         userName,
         userEmail,
         sessionId,
         metadata: {
-          userRole: 'customer',
-          businessId,
-          slug: slug || '', // Pass slug in metadata for early resolution
+          userRole: 'general',
           userName: userName || 'Guest',
           userEmail: userEmail || '',
           sessionId,
@@ -206,7 +99,7 @@ const CustomerChat = () => {
       setLivekitInfo(info);
       setIsCallActive(true);
       setErrorBanner("");
-      try { localStorage.setItem('voxa_last_session', JSON.stringify({ role: 'customer', businessId })); } catch {}
+      try { localStorage.setItem('voxa_last_session', JSON.stringify({ role: 'general' })); } catch {}
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('Failed to start call:', e);
@@ -313,18 +206,6 @@ const CustomerChat = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
-      {ticketBanner && (
-        <div className="bg-primary/10 text-primary text-xs sm:text-sm px-3 py-2 text-center flex flex-col sm:flex-row gap-2 sm:gap-3 items-center justify-center">
-          <div>
-            Ticket created: <span className="font-semibold">{ticketBanner.id}</span>
-          </div>
-          <label className="inline-flex items-center gap-2">
-            <input type="checkbox" checked={emailUpdates} onChange={(e) => { setEmailUpdates(e.target.checked); try { localStorage.setItem('voxa_email_updates', e.target.checked ? '1' : '0'); } catch {} }} />
-            Receive updates by email
-          </label>
-          <button className="underline" onClick={() => setTicketBanner(null)}>Dismiss</button>
-        </div>
-      )}
       {errorBanner && (
         <div className="bg-destructive/10 text-destructive text-xs sm:text-sm px-3 py-2 text-center">{errorBanner} <button className="underline" onClick={handleStartCall}>Retry</button></div>
       )}
@@ -333,9 +214,9 @@ const CustomerChat = () => {
       )}
       <header className="glass border-b border-border p-4 sm:p-6">
         <div className="max-w-6xl mx-auto flex items-center gap-3 sm:gap-4">
-          <img src={voxaLogo} alt={businessName} className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14" />
+          <img src={voxaLogo} alt="Voxa" className="w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14" />
           <div>
-            <h1 className="text-lg sm:text-xl md:text-2xl font-bold">{businessName}</h1>
+            <h1 className="text-lg sm:text-xl md:text-2xl font-bold">Voxa Assistant</h1>
             <p className="text-xs sm:text-sm text-muted-foreground">Voice Assistant</p>
           </div>
         </div>
@@ -351,7 +232,7 @@ const CustomerChat = () => {
               <div>
                 <h2 className="text-xl sm:text-2xl md:text-3xl font-bold mb-1 sm:mb-2">Start Voice Call</h2>
                 <p className="text-sm sm:text-base text-muted-foreground">
-                  Talk to our assistant instantly
+                  Talk to your AI assistant
                 </p>
               </div>
               <Button
@@ -379,7 +260,7 @@ const CustomerChat = () => {
                 <div className="rounded-xl border border-border overflow-hidden">
                   <LiveKitRoom
                     key={`room-${livekitInfo.token.slice(-10)}`}
-                    serverUrl={livekitInfo.serverUrl || getCustomerRoomUrl(businessId)}
+                    serverUrl={livekitInfo.serverUrl || getGeneralRoomUrl()}
                     token={livekitInfo.token}
                     connect
                     audio
@@ -399,9 +280,7 @@ const CustomerChat = () => {
                     }}
                   >
                     <RoleContextAnnouncer 
-                      role="customer" 
-                      businessId={businessId} 
-                      slug={slug}
+                      role="general" 
                       userName={currentUserName} 
                       userEmail={currentUserEmail} 
                     />
@@ -441,8 +320,8 @@ const CustomerChat = () => {
           </div>
           <div className="flex-1">
             <ChatInterface 
-              mode="customer" 
-              businessName={businessName} 
+              mode="general" 
+              businessName="Voxa" 
               onSend={async (text) => {
                 const isCallActive = sessionStorage.getItem('voxa_call_active');
                 if (isCallActive) {
@@ -466,9 +345,9 @@ const CustomerChat = () => {
   );
 };
 
-export default CustomerChat;
+export default GeneralChat;
 
-function RoleContextAnnouncer({ role, businessId, slug, userName, userEmail }: { role: 'customer'; businessId?: string; slug?: string; userName?: string; userEmail?: string }) {
+function RoleContextAnnouncer({ role, userName, userEmail }: { role: 'general'; userName?: string; userEmail?: string }) {
   const room = useRoomContext();
   useEffect(() => {
     if (!room) return;
@@ -484,8 +363,6 @@ function RoleContextAnnouncer({ role, businessId, slug, userName, userEmail }: {
           type: 'role_context',
           context: {
             role,
-            businessId: businessId || '',
-            slug: slug || '',
             userName: userName || 'Guest',
             userEmail: userEmail || '',
             sessionId: sessionStorage.getItem('voxa_session_id') || '',
@@ -521,7 +398,7 @@ function RoleContextAnnouncer({ role, businessId, slug, userName, userEmail }: {
         (room as any).off('reconnected', maybeAnnounce);
       }
     };
-  }, [room, role, businessId, slug, userName, userEmail]);
+  }, [room, role, userName, userEmail]);
 
   return null;
 }
@@ -787,3 +664,4 @@ function AgentChatListener({ onMessage }: { onMessage: (msg: string) => void }) 
   
   return null;
 }
+

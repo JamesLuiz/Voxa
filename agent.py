@@ -329,13 +329,22 @@ async def entrypoint(ctx: agents.JobContext):
             logger.debug(f"Metadata userName: {metadata.get('userName')}, userEmail: {metadata.get('userEmail')}")
 
         # 2. Fetch business context if we have a businessId or can resolve one
+        # PRIORITY: Fetch immediately for all roles to have context ready ASAP
         business_context = {}
         # Helpful extras: frontend may provide slug or owner email in metadata.
         slug_candidate = None
         if isinstance(metadata, dict):
             slug_candidate = metadata.get('slug') or metadata.get('businessSlug') or metadata.get('business_slug')
 
+        # For customers: ALWAYS fetch business context immediately if we have businessId or slug
+        # This ensures the agent has business details from the start
+        identifier_to_fetch = None
         if business_id:
+            identifier_to_fetch = business_id
+        elif slug_candidate:
+            identifier_to_fetch = slug_candidate
+        
+        if identifier_to_fetch:
             try:
                 # Call the tool function directly
                 from livekit.agents import RunContext
@@ -347,16 +356,23 @@ async def entrypoint(ctx: agents.JobContext):
                     except Exception:
                         pass
 
-                business_context_result = await get_business_context(mock_ctx, business_id)
+                business_context_result = await get_business_context(mock_ctx, identifier_to_fetch)
                 if business_context_result:
                     import json as _json
                     try:
                         business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
-                        logger.debug(f"Successfully fetched business context for {business_id}: {business_context.get('name', 'unknown')}")
+                        logger.info(f"Successfully fetched business context for {identifier_to_fetch}: {business_context.get('name', 'unknown')}")
+                        
+                        # If we used slug and got businessId back, update business_id
+                        if slug_candidate and identifier_to_fetch == slug_candidate and not business_id:
+                            resolved_id = business_context.get('businessId') or business_context.get('_id')
+                            if resolved_id:
+                                business_id = str(resolved_id)
+                                logger.info(f"Resolved slug {slug_candidate} to businessId {business_id} in entrypoint")
                     except Exception:
                         business_context = {}
                 else:
-                    logger.warning(f"get_business_context returned empty result for businessId: {business_id}")
+                    logger.warning(f"get_business_context returned empty result for {identifier_to_fetch}")
             except Exception as e:
                 logger.warning(f"Failed to fetch business context: {e}")
         elif is_owner:
@@ -417,8 +433,9 @@ async def entrypoint(ctx: agents.JobContext):
                     except Exception:
                         pass
 
-        # If we still don't have a business_id but there is a slug provided (customer flow), try resolving by slug
-        if (not business_id) and slug_candidate:
+        # Additional fallback: If we still don't have business context and have slug, try one more time
+        # (This handles edge cases where the first fetch might have failed)
+        if (not business_context or not business_context.get('name')) and slug_candidate and identifier_to_fetch != slug_candidate:
             try:
                 from livekit.agents import RunContext
                 mock_ctx = RunContext()
@@ -435,12 +452,13 @@ async def entrypoint(ctx: agents.JobContext):
                         # If resolved, try to extract businessId
                         if isinstance(business_context, dict):
                             resolved_id = business_context.get('businessId') or business_context.get('_id')
-                            if resolved_id:
+                            if resolved_id and not business_id:
                                 business_id = str(resolved_id)
+                                logger.info(f"Resolved slug {slug_candidate} to businessId {business_id} in fallback")
                     except Exception:
-                        business_context = {}
-            except Exception:
-                pass
+                        pass
+            except Exception as e:
+                logger.debug(f"Fallback slug resolution failed: {e}")
     except Exception as e:
         logger.debug(f"Error preparing metadata/business context: {e}")
 
@@ -495,10 +513,10 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 
-    # Fetch owner profile for owners to get name
+    # Fetch owner profile for owners to get name - do this early
     owner_name = None
     owner_info = {}
-    if is_owner and business_id:
+    if is_owner:
         try:
             from tools import get_owner_profile
             from livekit.agents import RunContext
@@ -508,61 +526,47 @@ async def entrypoint(ctx: agents.JobContext):
                     mock_ctx.room = ctx.room
                 except Exception:
                     pass
+            
+            # Try multiple methods to get owner info
             owner_email = metadata.get('userEmail') or metadata.get('ownerEmail') or metadata.get('email')
             if owner_email:
-                owner_res = await get_owner_profile(mock_ctx, owner_email)
-                import json as _json
-                parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
-                if isinstance(parsed, dict):
-                    owner_info = parsed
-                    owner_name = parsed.get('name')
-            elif business_id:
-                # Try fetching by business ID
-                owner_res = await get_owner_profile(mock_ctx, business_id)
-                parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
-                if isinstance(parsed, dict):
-                    owner_info = parsed
-                    owner_name = parsed.get('name')
+                try:
+                    owner_res = await get_owner_profile(mock_ctx, owner_email)
+                    import json as _json
+                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                    if isinstance(parsed, dict) and parsed:
+                        owner_info = parsed
+                        owner_name = parsed.get('name')
+                        logger.info(f"Fetched owner profile by email: {owner_name}")
+                except Exception as e:
+                    logger.debug(f"Could not fetch owner profile by email: {e}")
+            
+            # Also try fetching by business ID if we have it
+            if (not owner_info or not owner_name) and business_id:
+                try:
+                    owner_res = await get_owner_profile(mock_ctx, business_id)
+                    import json as _json
+                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                    if isinstance(parsed, dict) and parsed:
+                        owner_info = parsed
+                        owner_name = parsed.get('name')
+                        logger.info(f"Fetched owner profile by businessId: {owner_name}")
+                except Exception as e:
+                    logger.debug(f"Could not fetch owner profile by businessId: {e}")
         except Exception as e:
             logger.debug(f"Could not fetch owner profile: {e}")
     
     # Fallback to metadata userName if available
     if not owner_name and metadata.get('userName'):
         owner_name = metadata.get('userName')
+        if not owner_info:
+            owner_info = {'name': owner_name}
     
     # Get business name from context
     business_name = business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business'
     
-    # Create role-specific welcome message
-    welcome_message = SESSION_INSTRUCTION  # Default fallback
-    
-    if is_owner:
-        if owner_name and business_name != 'the business':
-            welcome_message = f"Hi {owner_name}! Welcome back to your Voxa business assistant for {business_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
-        elif owner_name:
-            welcome_message = f"Hi {owner_name}! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
-        elif business_name != 'the business':
-            welcome_message = f"Hi! Welcome back to your Voxa business assistant for {business_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
-        else:
-            welcome_message = "Hi! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
-    elif is_general:
-        general_name = metadata.get('userName') or metadata.get('name')
-        if general_name:
-            welcome_message = f"Hey {general_name}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
-        else:
-            welcome_message = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
-    else:
-        # Customer mode
-        if business_name != 'the business':
-            welcome_message = f"Hi there! I'm Voxa, your AI assistant for {business_name}. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
-        else:
-            welcome_message = "Hi there! I'm Voxa, your AI assistant. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
-    
-    # Send initial session welcome message once on connect
-    try:
-        await safe_generate_reply(session, ctx, welcome_message, timeout=30.0)
-    except Exception:
-        pass
+    # Welcome message will be sent after role_context is received (see below)
+    # This ensures we have the correct role information from the frontend
 
     # 6. Connect to the room (IMPORTANT - this was missing!)
     await ctx.connect()
@@ -602,7 +606,26 @@ async def entrypoint(ctx: agents.JobContext):
                     # Handle role_context messages to override runtime metadata
                     if obj.get('type') == 'role_context' and isinstance(obj.get('context'), dict):
                         try:
-                            runtime_overrides.update(obj.get('context'))
+                            context_data = obj.get('context')
+                            runtime_overrides.update(context_data)
+                            
+                            # Update user_role and other variables based on role_context
+                            new_role = context_data.get('role', user_role)
+                            if new_role and new_role != user_role:
+                                user_role = new_role
+                                is_owner = (user_role == 'owner')
+                                is_general = (user_role == 'general')
+                                logger.info(f"Role updated from role_context: {user_role}")
+                            
+                            # Update metadata with role_context info
+                            if context_data.get('userName'):
+                                metadata['userName'] = context_data['userName']
+                            if context_data.get('userEmail'):
+                                metadata['userEmail'] = context_data['userEmail']
+                            if context_data.get('businessId'):
+                                business_id = context_data['businessId']
+                                metadata['businessId'] = business_id
+                            
                             # Also try to update room metadata for consistency
                             try:
                                 import json as _json
@@ -621,8 +644,81 @@ async def entrypoint(ctx: agents.JobContext):
                                         pass
                             except Exception:
                                 pass
-                        except Exception:
-                            pass
+                            
+                            # IMMEDIATELY fetch business context and owner info when role_context arrives
+                            # This ensures the agent has all details before greeting
+                            async def fetch_and_greet():
+                                nonlocal business_context, owner_info, business_id
+                                
+                                # Get slug from context_data if available
+                                slug_from_context = context_data.get('slug') or context_data.get('businessSlug') or ''
+                                
+                                # Fetch business context - try businessId first, then slug
+                                identifier_to_use = business_id or slug_from_context
+                                
+                                if identifier_to_use:
+                                    try:
+                                        from livekit.agents import RunContext
+                                        mock_ctx = RunContext()
+                                        if hasattr(mock_ctx, 'room'):
+                                            try:
+                                                mock_ctx.room = ctx.room
+                                            except Exception:
+                                                pass
+                                        
+                                        # Fetch business context (works with both businessId and slug)
+                                        business_context_result = await get_business_context(mock_ctx, identifier_to_use)
+                                        if business_context_result:
+                                            import json as _json
+                                            try:
+                                                business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
+                                                logger.info(f"Fetched business context for {identifier_to_use}: {business_context.get('name', 'unknown')}")
+                                                
+                                                # If we used slug and got businessId back, update business_id
+                                                if slug_from_context and not business_id:
+                                                    resolved_id = business_context.get('businessId') or business_context.get('_id')
+                                                    if resolved_id:
+                                                        business_id = str(resolved_id)
+                                                        logger.info(f"Resolved slug {slug_from_context} to businessId: {business_id}")
+                                            except Exception:
+                                                business_context = {}
+                                        
+                                        # For owners, also fetch owner profile
+                                        if user_role == 'owner':
+                                            owner_email = context_data.get('userEmail') or metadata.get('userEmail')
+                                            if owner_email:
+                                                try:
+                                                    from tools import get_owner_profile
+                                                    owner_res = await get_owner_profile(mock_ctx, owner_email)
+                                                    import json as _json
+                                                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                                                    if isinstance(parsed, dict) and parsed:
+                                                        owner_info = parsed
+                                                        logger.info(f"Fetched owner profile: {owner_info.get('name', 'unknown')}")
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to fetch owner profile: {e}")
+                                            # Also try fetching by businessId
+                                            if (not owner_info or not owner_info.get('name')) and business_id:
+                                                try:
+                                                    from tools import get_owner_profile
+                                                    owner_res = await get_owner_profile(mock_ctx, business_id)
+                                                    import json as _json
+                                                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                                                    if isinstance(parsed, dict) and parsed:
+                                                        owner_info = parsed
+                                                        logger.info(f"Fetched owner profile by businessId: {owner_info.get('name', 'unknown')}")
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to fetch owner profile by businessId: {e}")
+                                    except Exception as e:
+                                        logger.warning(f"Error fetching business/owner context: {e}")
+                                
+                                # Now send the welcome message with fresh data
+                                await send_role_specific_welcome(session, ctx, user_role, business_id, business_context, metadata, owner_info)
+                            
+                            # Fetch data and greet asynchronously
+                            asyncio.create_task(fetch_and_greet())
+                        except Exception as e:
+                            logger.warning(f"Error processing role_context: {e}")
                         # No user text to process in this message
                         return
                     if obj.get('type') == 'text_message' and obj.get('text'):
@@ -1030,59 +1126,62 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception:
                 pass
 
-        # 9. Generate initial welcome message (session is now running)
-        # Initialize welcome_msg outside try block to ensure it's always defined
-        welcome_msg = "Hello! I'm Voxa. How can I help you today?"
+        # 9. Wait for role_context before sending welcome message
+        # This ensures we have the correct role from the frontend
+        # Set up a flag to track if welcome has been sent
+        welcome_sent = False
         
-        try:
-            if is_owner:
-                owner_name = owner_info.get('name') if isinstance(owner_info, dict) else None
-                if not owner_name:
-                    # Try to extract from metadata - check userName first (set by backend)
+        async def send_role_specific_welcome(session, ctx, role, biz_id, biz_context, meta, owner_info_dict):
+            """Send role-specific welcome message"""
+            nonlocal welcome_sent
+            if welcome_sent:
+                return  # Already sent
+            welcome_sent = True
+            
+            welcome_msg = "Hello! I'm Voxa. How can I help you today?"
+            
+            try:
+                if role == 'owner':
+                    # Get owner name from multiple sources
+                    owner_name = None
+                    if isinstance(owner_info_dict, dict) and owner_info_dict.get('name'):
+                        owner_name = owner_info_dict.get('name')
+                    if not owner_name:
+                        owner_name = meta.get('userName') or meta.get('ownerName')
+                    if not owner_name and isinstance(owner_info_dict, dict) and owner_info_dict.get('email'):
+                        try:
+                            owner_name = owner_info_dict.get('email').split('@', 1)[0]
+                        except:
+                            pass
+                    if not owner_name and meta.get('userEmail'):
+                        try:
+                            owner_name = meta.get('userEmail').split('@', 1)[0]
+                        except:
+                            pass
+                    
+                    # Use proper greeting from prompts.py
+                    if owner_name:
+                        welcome_msg = f"Hi {owner_name}! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+                    else:
+                        welcome_msg = "Hi! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+                elif role == 'customer':
+                    # Customer-facing greeting from prompts.py
                     try:
-                        md = metadata or {}
-                        owner_name = md.get('userName') or md.get('ownerName') or md.get('owner') or None
-                        if not owner_name and isinstance(md.get('owner'), dict):
-                            owner_name = md.get('owner', {}).get('name')
+                        biz_name = biz_context.get('name') if isinstance(biz_context, dict) else None
                     except Exception:
-                        owner_name = None
-                
-                # If still no name, try email from metadata
-                if not owner_name:
-                    try:
-                        md = metadata or {}
-                        owner_email = md.get('userEmail') or md.get('email') or None
-                        if owner_email and isinstance(owner_email, str) and '@' in owner_email:
-                            owner_name = owner_email.split('@', 1)[0]
-                    except Exception:
-                        pass
-
-                if owner_name:
-                    welcome_msg = f"Hi {owner_name}! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. What would you like to focus on today?"
+                        biz_name = None
+                    if biz_name:
+                        welcome_msg = f"Hi there! I'm Voxa, your AI assistant for {biz_name}. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
+                    else:
+                        welcome_msg = "Hi there! I'm Voxa, your AI assistant. I'm here to help with whatever you need. To get started and provide you with the best support, I'll just need a few quick details from you. Don't worry, your information stays completely secure and is only used for support purposes."
                 else:
-                    welcome_msg = "Hello! I'm Voxa, your AI business assistant. I can help you manage customers, tickets, analytics, and more. How can I assist you today?"
-            elif user_role == 'customer':
-                # Customer-facing quick friendly intro using business name if available
-                try:
-                    biz_name = business_context.get('name') if isinstance(business_context, dict) else None
-                except Exception:
-                    biz_name = None
-                if biz_name:
-                    welcome_msg = f"Hi there! I'm Voxa, your AI assistant for {biz_name}. I'm here to help — can I get your name to get started?"
-                else:
-                    welcome_msg = "Hi there! I'm Voxa, your AI assistant. I'm here to help — can I get your name to get started?"
-
-            else:
-                # General users (public) - try to greet by provided metadata name/email
-                try:
-                    md = metadata or {}
-                    gen_name = md.get('userName') or md.get('name') or None
-                    gen_email = md.get('userEmail') or md.get('email') or None
+                    # General users (public) - greeting from prompts.py
+                    gen_name = meta.get('userName') or meta.get('name') or None
+                    gen_email = meta.get('userEmail') or meta.get('email') or None
                     
                     # If name not in metadata, try to fetch from backend using email
                     if not gen_name and gen_email:
                         try:
-                            # Try to fetch general user profile from backend
                             import requests as _req
                             backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
                             api_key = os.getenv('BACKEND_API_KEY', '')
@@ -1090,7 +1189,6 @@ async def entrypoint(ctx: agents.JobContext):
                             if api_key:
                                 headers["Authorization"] = f"Bearer {api_key}"
                             
-                            # Try to get general user by email (URL encode the email)
                             try:
                                 import urllib.parse
                                 encoded_email = urllib.parse.quote(gen_email, safe='')
@@ -1108,115 +1206,84 @@ async def entrypoint(ctx: agents.JobContext):
                                 logger.debug(f"Failed to fetch general user by email: {e}")
                         except Exception:
                             pass
-                except Exception:
-                    gen_name = None
-                    gen_email = None
 
-                if gen_name:
-                    welcome_msg = f"Hi {gen_name}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
-                elif gen_email:
-                    try:
-                        local = gen_email.split('@', 1)[0]
-                        if local:
-                            welcome_msg = f"Hi {local}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
-                        else:
+                    # Use proper greeting from prompts.py
+                    if gen_name:
+                        welcome_msg = f"Hi {gen_name}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
+                    elif gen_email:
+                        try:
+                            local = gen_email.split('@', 1)[0]
+                            if local:
+                                welcome_msg = f"Hi {local}! I'm Voxa. I can help with info, support, and more. What would you like help with today?"
+                            else:
+                                welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+                        except Exception:
                             welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
-                    except Exception:
-                        welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
-                else:
-                    welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
-            
-            logger.info(f"Generated welcome message for {user_role}: {welcome_msg[:100]}...")
-            
-            # Wait for at least one participant to connect before sending welcome
-            # This ensures the user is actually connected and can receive the message
-            max_wait = 10  # Maximum wait time in seconds
-            wait_interval = 0.5  # Check every 0.5 seconds
-            waited = 0
-            participants_connected = False
-            
-            while waited < max_wait:
-                try:
-                    # Check if there are any remote participants (users) connected
-                    if hasattr(ctx.room, 'remote_participants'):
-                        remote_parts = getattr(ctx.room, 'remote_participants', {})
-                        if isinstance(remote_parts, dict) and len(remote_parts) > 0:
-                            participants_connected = True
-                            logger.debug(f"Found {len(remote_parts)} remote participant(s)")
-                            break
-                        elif hasattr(remote_parts, '__len__') and len(remote_parts) > 0:
-                            participants_connected = True
-                            logger.debug("Found remote participants (via __len__)")
-                            break
-                    # Also check participants attribute
-                    if hasattr(ctx.room, 'participants'):
-                        parts = getattr(ctx.room, 'participants', {})
-                        if isinstance(parts, dict):
-                            # Exclude local participant (agent)
-                            remote_count = len([p for p in parts.values() if hasattr(p, 'identity') and 'agent' not in str(p.identity).lower()])
-                            if remote_count > 0:
-                                participants_connected = True
-                                logger.debug(f"Found {remote_count} participant(s) via participants attribute")
-                                break
-                except Exception as e:
-                    logger.debug(f"Error checking participants: {e}")
-                
-                await asyncio.sleep(wait_interval)
-                waited += wait_interval
-            
-            if not participants_connected:
-                logger.warning("No participants connected after waiting, sending welcome message anyway")
-            
-            # Use centralized safe generator for welcome message
-            try:
-                ok = await safe_generate_reply(session, ctx, welcome_msg, timeout=30.0)
-                if ok:
-                    logger.info("Welcome message sent via voice successfully")
-                else:
-                    logger.warning("Initial welcome message did not complete")
-            except Exception as e:
-                logger.warning(f"Welcome message generation error: {e}")
-        except Exception as e:
-            logger.exception(f'Failed to generate initial reply: {e}')
-            # welcome_msg is already initialized above, so it will always have a value
-
-        # Publish the plain welcome text into the LiveKit data channel so
-        # frontends listening with AgentChatListener receive it as an
-        # immediate chat message. This is best-effort and won't fail the
-        # agent if publishing fails.
-        # IMPORTANT: Always try to publish the welcome message, even if voice generation failed
-        try:
-            import json as _json
-            payload_data = { 'type': 'agent_response', 'text': welcome_msg }
-            payload_json = _json.dumps(payload_data)
-            payload_bytes = payload_json.encode('utf-8')
-            
-            if hasattr(ctx.room, 'local_participant') and getattr(ctx.room, 'local_participant'):
-                local_participant = ctx.room.local_participant
-                try:
-                    # Try publish_data first (standard LiveKit method)
-                    if hasattr(local_participant, 'publish_data'):
-                        await local_participant.publish_data(payload_bytes, reliable=True)
-                        logger.info(f"Published welcome message via publish_data: {welcome_msg[:50]}...")
-                    # Try sendText if available (some LiveKit versions)
-                    elif hasattr(local_participant, 'sendText'):
-                        await local_participant.sendText(welcome_msg, topic='lk.chat')
-                        logger.info(f"Published welcome message via sendText: {welcome_msg[:50]}...")
                     else:
-                        logger.warning("Local participant has no publish_data or sendText method")
-                except Exception as e:
-                    logger.warning(f"Could not publish welcome message via local_participant: {e}")
-                    # Try alternative: send via room data API if available
+                        welcome_msg = "Hey! I'm Voxa. I can help with info, support, and more. What's your name?"
+                
+                logger.info(f"Generated welcome message for {role}: {welcome_msg[:100]}...")
+                
+                # Wait for at least one participant to connect before sending welcome
+                max_wait = 5  # Maximum wait time in seconds
+                wait_interval = 0.5
+                waited = 0
+                participants_connected = False
+                
+                while waited < max_wait:
                     try:
-                        if hasattr(ctx.room, 'send_data'):
-                            await ctx.room.send_data(payload_bytes, reliable=True)
-                            logger.info(f"Published welcome message via room.send_data: {welcome_msg[:50]}...")
-                    except Exception as e2:
-                        logger.debug(f"Could not publish via room.send_data either: {e2}")
-            else:
-                logger.warning("No local_participant available to publish welcome message")
-        except Exception as e:
-            logger.warning(f"Exception publishing welcome message: {e}")
+                        if hasattr(ctx.room, 'remote_participants'):
+                            remote_parts = getattr(ctx.room, 'remote_participants', {})
+                            if isinstance(remote_parts, dict) and len(remote_parts) > 0:
+                                participants_connected = True
+                                break
+                        if hasattr(ctx.room, 'participants'):
+                            parts = getattr(ctx.room, 'participants', {})
+                            if isinstance(parts, dict):
+                                remote_count = len([p for p in parts.values() if hasattr(p, 'identity') and 'agent' not in str(p.identity).lower()])
+                                if remote_count > 0:
+                                    participants_connected = True
+                                    break
+                    except Exception:
+                        pass
+                    
+                    await asyncio.sleep(wait_interval)
+                    waited += wait_interval
+                
+                # Send welcome message via voice
+                try:
+                    ok = await safe_generate_reply(session, ctx, welcome_msg, timeout=30.0)
+                    if ok:
+                        logger.info(f"Welcome message sent via voice for {role}")
+                except Exception as e:
+                    logger.warning(f"Welcome message generation error: {e}")
+                
+                # Also publish welcome message to data channel
+                try:
+                    import json as _json
+                    payload_data = { 'type': 'agent_response', 'text': welcome_msg }
+                    payload_json = _json.dumps(payload_data)
+                    payload_bytes = payload_json.encode('utf-8')
+                    
+                    if hasattr(ctx.room, 'local_participant') and getattr(ctx.room, 'local_participant'):
+                        local_participant = ctx.room.local_participant
+                        try:
+                            if hasattr(local_participant, 'publish_data'):
+                                await local_participant.publish_data(payload_bytes, reliable=True)
+                            elif hasattr(local_participant, 'sendText'):
+                                await local_participant.sendText(welcome_msg, topic='lk.chat')
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            except Exception as e:
+                logger.exception(f'Failed to send role-specific welcome: {e}')
+        
+        # Wait a short time for role_context, then send welcome if not received
+        await asyncio.sleep(2)  # Give frontend time to send role_context
+        if not welcome_sent:
+            # Fallback: send welcome based on initial role detection
+            await send_role_specific_welcome(session, ctx, user_role, business_id, business_context, metadata, owner_info)
 
         # 10. For customers, fetch business context at start
         if user_role == 'customer' and business_id:

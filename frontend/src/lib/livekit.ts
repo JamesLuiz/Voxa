@@ -8,4 +8,8 @@ export function getOwnerRoomUrl() {
   return `${LIVEKIT_WS}/owner`;
 }
 
+export function getGeneralRoomUrl() {
+  return `${LIVEKIT_WS}/general`;
+}
+
 

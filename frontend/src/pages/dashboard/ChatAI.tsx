@@ -1,7 +1,7 @@
-import CustomerChat from "@/pages/CustomerChat";
+import OwnerChat from "@/pages/OwnerChat";
 
 const ChatAI = () => {
-  return <CustomerChat role="owner" />;
+  return <OwnerChat />;
 };
 
 export default ChatAI;

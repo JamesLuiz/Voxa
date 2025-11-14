@@ -15,6 +15,8 @@ import Tickets from "./pages/dashboard/Tickets";
 import Meetings from "./pages/dashboard/Meetings";
 import Analytics from "./pages/dashboard/Analytics";
 import CustomerChat from "./pages/CustomerChat";
+import OwnerChat from "./pages/OwnerChat";
+import GeneralChat from "./pages/GeneralChat";
 import GeneralRegister from "./pages/GeneralRegister";
 import GeneralLogin from "./pages/GeneralLogin";
 import NotFound from "./pages/NotFound";
@@ -28,7 +30,7 @@ const GeneralChatProtected = () => {
     window.location.href = '/general/login';
     return null;
   }
-  return <CustomerChat role="general" />;
+  return <GeneralChat />;
 };
 
 const queryClient = new QueryClient();
