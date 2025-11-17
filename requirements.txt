@@ -7,6 +7,7 @@ mem0ai
 duckduckgo-search
 langchain_community
 requests
+beautifulsoup4
 python-dotenv
 mistralai
 redis>=4.6.0
