@@ -1,18 +1,47 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import voxaLogo from "@/assets/voxa-logo.png";
 
 
 const Splash = () => {
   const navigate = useNavigate();
+  const [logoLoaded, setLogoLoaded] = useState(false);
+  const [minDisplayTimeElapsed, setMinDisplayTimeElapsed] = useState(false);
 
+  // Track when logo image loads
   useEffect(() => {
-    const timer = setTimeout(() => {
-  navigate("/login");
-    }, 3000);
+    const img = new Image();
+    img.src = voxaLogo;
+    img.onload = () => {
+      setLogoLoaded(true);
+    };
+    img.onerror = () => {
+      // Even if image fails to load, proceed after a delay
+      setTimeout(() => setLogoLoaded(true), 1000);
+    };
+  }, []);
 
-    return () => clearTimeout(timer);
-  }, [navigate]);
+  // Start minimum display timer once logo is loaded
+  useEffect(() => {
+    if (logoLoaded) {
+      const timer = setTimeout(() => {
+        setMinDisplayTimeElapsed(true);
+      }, 1500); // Minimum 1.5 seconds to display the logo after it loads
+
+      return () => clearTimeout(timer);
+    }
+  }, [logoLoaded]);
+
+  // Navigate once both conditions are met: logo loaded AND minimum display time elapsed
+  useEffect(() => {
+    if (logoLoaded && minDisplayTimeElapsed) {
+      const timer = setTimeout(() => {
+        navigate("/login");
+      }, 300); // Small delay for smooth transition
+
+      return () => clearTimeout(timer);
+    }
+  }, [logoLoaded, minDisplayTimeElapsed, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background relative overflow-hidden">
@@ -30,7 +59,8 @@ const Splash = () => {
           <img 
             src={voxaLogo} 
             alt="Voxa Logo" 
-            className="relative w-40 h-40 animate-float drop-shadow-2xl"
+            className={`relative w-40 h-40 animate-float drop-shadow-2xl transition-opacity duration-500 ${logoLoaded ? 'opacity-100' : 'opacity-0'}`}
+            onLoad={() => setLogoLoaded(true)}
           />
         </div>
         
