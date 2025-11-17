@@ -336,8 +336,9 @@ async def entrypoint(ctx: agents.JobContext):
         if isinstance(metadata, dict):
             slug_candidate = metadata.get('slug') or metadata.get('businessSlug') or metadata.get('business_slug')
 
-        # For customers: ALWAYS fetch business context immediately if we have businessId or slug
-        # This ensures the agent has business details from the start
+        # ALWAYS fetch business context immediately if we have businessId or slug
+        # This ensures the agent has ALL business details (name, description, products, policies, etc.) from the start
+        # This applies to ALL roles: owners, customers, and general users
         identifier_to_fetch = None
         if business_id:
             identifier_to_fetch = business_id
@@ -362,6 +363,7 @@ async def entrypoint(ctx: agents.JobContext):
                     try:
                         business_context = _json.loads(business_context_result) if isinstance(business_context_result, str) else business_context_result
                         logger.info(f"Successfully fetched business context for {identifier_to_fetch}: {business_context.get('name', 'unknown')}")
+                        logger.debug(f"Business context includes: name={business_context.get('name')}, description={bool(business_context.get('description'))}, products={len(business_context.get('products', []))}, policies={bool(business_context.get('policies'))}")
                         
                         # If we used slug and got businessId back, update business_id
                         if slug_candidate and identifier_to_fetch == slug_candidate and not business_id:
@@ -375,7 +377,9 @@ async def entrypoint(ctx: agents.JobContext):
                     logger.warning(f"get_business_context returned empty result for {identifier_to_fetch}")
             except Exception as e:
                 logger.warning(f"Failed to fetch business context: {e}")
-        elif is_owner:
+        
+        # For owners: Additional resolution if businessId wasn't found yet
+        if is_owner and not business_id:
             # For owners, try to get businessId from metadata or try to resolve it
             logger.debug("Owner detected but no businessId in metadata, attempting to resolve")
             # Try to extract from room metadata more thoroughly
@@ -463,6 +467,14 @@ async def entrypoint(ctx: agents.JobContext):
         logger.debug(f"Error preparing metadata/business context: {e}")
 
     # 3. Format the agent instruction with business context
+    # Log business context availability for debugging
+    if isinstance(business_context, dict) and business_context:
+        logger.info(f"Business context available: name='{business_context.get('name')}', has_description={bool(business_context.get('description'))}, products_count={len(business_context.get('products', []))}, has_policies={bool(business_context.get('policies'))}, has_agentConfig={bool(business_context.get('agentConfig'))}")
+        if business_context.get('owner'):
+            logger.info(f"Business context includes owner: {business_context.get('owner', {}).get('name', 'unknown')}")
+    else:
+        logger.warning(f"Business context is empty or not available for role {user_role}, businessId: {business_id}")
+    
     agent_config = business_context.get('agentConfig', {}) if isinstance(business_context, dict) else {}
 
     # Evaluate mode first to avoid format string issues
@@ -475,17 +487,25 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         business_hours_str = str(business_hours_config) if business_hours_config else '9-5'
 
+    # Extract business details for agent instruction
+    biz_name = business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business'
+    biz_description = business_context.get('description', '') if isinstance(business_context, dict) else ''
+    biz_products = business_context.get('products', []) if isinstance(business_context, dict) else []
+    biz_policies = business_context.get('policies', '') if isinstance(business_context, dict) else ''
+    
     formatted_instruction = AGENT_INSTRUCTION.format(
-        business_name=business_context.get('name', 'the business') if isinstance(business_context, dict) else 'the business',
-        business_description=business_context.get('description', '') if isinstance(business_context, dict) else '',
-        products_list=', '.join(business_context.get('products', [])) if isinstance(business_context, dict) and isinstance(business_context.get('products'), list) else '',
-        business_policies=business_context.get('policies', '') if isinstance(business_context, dict) else '',
+        business_name=biz_name,
+        business_description=biz_description,
+        products_list=', '.join(biz_products) if isinstance(biz_products, list) else '',
+        business_policies=biz_policies,
         mode=mode_value,
         agent_tone=agent_config.get('tone', 'professional') if isinstance(agent_config, dict) else 'professional',
         response_style=agent_config.get('responseStyle', 'concise') if isinstance(agent_config, dict) else 'concise',
         business_hours_str=business_hours_str,
         custom_prompt=agent_config.get('customPrompt', '') if isinstance(agent_config, dict) else ''
     )
+    
+    logger.info(f"Agent instruction formatted with business_name='{biz_name}', mode={mode_value}")
 
     # If customer role, append customer care guidance
     if not is_owner and not is_general:
@@ -514,9 +534,20 @@ async def entrypoint(ctx: agents.JobContext):
     )
 
     # Fetch owner profile for owners to get name - do this early
+    # Also check if business context already includes owner info
     owner_name = None
     owner_info = {}
-    if is_owner:
+    
+    # First, check if business context already has owner info (from business context API)
+    if is_owner and isinstance(business_context, dict) and business_context.get('owner'):
+        owner_from_context = business_context.get('owner')
+        if isinstance(owner_from_context, dict):
+            owner_info = owner_from_context.copy()
+            owner_name = owner_from_context.get('name')
+            logger.info(f"Using owner info from business context: {owner_name}")
+    
+    # If we don't have owner info yet, try fetching it
+    if is_owner and (not owner_info or not owner_name):
         try:
             from tools import get_owner_profile
             from livekit.agents import RunContext
@@ -1159,9 +1190,18 @@ async def entrypoint(ctx: agents.JobContext):
                         except:
                             pass
                     
-                    # Use proper greeting from prompts.py
-                    if owner_name:
+                    # Get business name from business context (should be available now)
+                    biz_name = biz_context.get('name') if isinstance(biz_context, dict) else None
+                    if not biz_name:
+                        biz_name = 'your business'
+                    
+                    # Use proper greeting from prompts.py with business name
+                    if owner_name and biz_name and biz_name != 'your business':
+                        welcome_msg = f"Hi {owner_name}! Welcome back to your Voxa business assistant for {biz_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+                    elif owner_name:
                         welcome_msg = f"Hi {owner_name}! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
+                    elif biz_name and biz_name != 'your business':
+                        welcome_msg = f"Hi! Welcome back to your Voxa business assistant for {biz_name}. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
                     else:
                         welcome_msg = "Hi! Welcome back to your Voxa business assistant. I'm here to help you manage your business, handle customer inquiries, and keep everything running smoothly. What would you like to focus on today?"
                 elif role == 'customer':

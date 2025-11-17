@@ -2,6 +2,7 @@ import logging
 from livekit.agents import function_tool, RunContext
 import requests
 import os
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +91,30 @@ async def get_owner_profile(context: RunContext, identifier: str) -> str:
         return "{}"
 
 @function_tool()
-async def get_analytics(context: RunContext, metric: str, business_id: str) -> str:
-    """Get business metrics: 'overview'|'tickets'|'customers'"""
+async def get_analytics(context: RunContext, metric: str, business_id: Optional[str] = None) -> str:
+    """Get business metrics: 'overview'|'tickets'|'customers'. business_id may be inferred from room metadata if not provided."""
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")
+        
+        # Extract business_id from room metadata if not provided
+        if not business_id and context:
+            try:
+                if hasattr(context, 'room') and context.room:
+                    room_meta = getattr(context.room, 'metadata', {}) if hasattr(context.room, 'metadata') else {}
+                    if isinstance(room_meta, str):
+                        import json as _json
+                        try:
+                            room_meta = _json.loads(room_meta)
+                        except:
+                            room_meta = {}
+                    if isinstance(room_meta, dict) and room_meta.get('businessId'):
+                        business_id = room_meta.get('businessId')
+            except Exception:
+                pass
+        
+        if not business_id:
+            return "Error: Business ID is required to get analytics. Please provide the business context or ensure you're connected with business context."
+        
         r = requests.get(f"{backend_url}/api/analytics/{metric}", params={"businessId": business_id}, timeout=10)
         return r.text
     except Exception as e:

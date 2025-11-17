@@ -227,7 +227,10 @@ const CustomerChat = () => {
     } catch (e) {
       // ignore
     }
-    setReconnectOffer(true);
+    // Automatically refresh the page after a short delay to allow cleanup
+    setTimeout(() => {
+      window.location.reload();
+    }, 500);
   };
 
   const VoiceInline = () => {
@@ -327,9 +330,6 @@ const CustomerChat = () => {
       )}
       {errorBanner && (
         <div className="bg-destructive/10 text-destructive text-xs sm:text-sm px-3 py-2 text-center">{errorBanner} <button className="underline" onClick={handleStartCall}>Retry</button></div>
-      )}
-      {reconnectOffer && !isCallActive && (
-        <div className="bg-primary/10 text-primary text-xs sm:text-sm px-3 py-2 text-center">Reconnect to your last session? <button className="underline" onClick={() => { setReconnectOffer(false); handleStartCall(); }}>Reconnect</button></div>
       )}
       <header className="glass border-b border-border p-4 sm:p-6">
         <div className="max-w-6xl mx-auto flex items-center gap-3 sm:gap-4">
