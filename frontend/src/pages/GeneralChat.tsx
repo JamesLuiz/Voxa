@@ -16,6 +16,7 @@ import "@livekit/components-styles";
 import { GridLayout, ParticipantTile, TrackToggle, useRoomContext } from "@livekit/components-react";
 import { Track, DataPacket_Kind } from "livekit-client";
 import { LocalParticipant } from "livekit-client";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 
 const GeneralChat = () => {
@@ -279,6 +280,7 @@ const GeneralChat = () => {
                       }
                     }}
                   >
+                    <ConnectionStatus isCallActive={isCallActive} className="m-2 sm:m-3" />
                     <RoleContextAnnouncer 
                       role="general" 
                       userName={currentUserName} 
