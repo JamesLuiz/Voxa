@@ -49,8 +49,21 @@ export class CrmController {
   @Post(':id/conversations')
   async appendConversationById(
     @Param('id') id: string,
-    @Body() body: { role: 'user' | 'assistant'; content: string; timestamp?: string | Date },
+    @Body() body: { role?: 'user' | 'assistant'; content?: string; timestamp?: string | Date },
   ) {
+    // Validate body exists and is an object
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return { error: 'Invalid request body', received: body };
+    }
+
+    // Validate required fields with better error messages
+    if (!body.role) {
+      return { error: 'Missing required field: role is required', received: body };
+    }
+    if (!body.content) {
+      return { error: 'Missing required field: content is required', received: body };
+    }
+
     const conv = {
       timestamp: body.timestamp ? new Date(body.timestamp) : new Date(),
       query: body.role === 'user' ? body.content : '',
@@ -69,9 +82,28 @@ export class CrmController {
   @Post('email/:email/conversations')
   async appendConversationByEmail(
     @Param('email') email: string,
-    @Body() body: { role: 'user' | 'assistant'; content: string; timestamp?: string | Date },
+    @Body() body: any,
     @Query('businessId') businessId?: string,
   ) {
+    // Log for debugging
+    console.log('[appendConversationByEmail] Received body:', JSON.stringify(body), 'Type:', typeof body);
+    
+    // Validate body exists and is an object
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      console.error('[appendConversationByEmail] Invalid body:', body);
+      return { error: 'Invalid request body', received: body };
+    }
+
+    // Validate required fields with better error messages
+    if (!body.role) {
+      console.error('[appendConversationByEmail] Missing role:', body);
+      return { error: 'Missing required field: role is required', received: body };
+    }
+    if (!body.content) {
+      console.error('[appendConversationByEmail] Missing content:', body);
+      return { error: 'Missing required field: content is required', received: body };
+    }
+
     const filter: any = { email: String(email).trim().toLowerCase() };
     if (businessId) filter.businessId = new Types.ObjectId(businessId);
     const customer = await this.customerModel.findOne(filter);

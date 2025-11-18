@@ -6,7 +6,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-@function_tool()
+@function_tool(
+    description="Send an email to any recipient using SendGrid. Use this tool when the user asks you to send an email, email someone, or send a message via email. The tool automatically uses the business's SendGrid credentials. Required parameters: to_email (recipient's email address), subject (email subject line), and message (email body content). Optional: business_id (will be auto-detected from context), cc_email (to CC someone). Example: 'Send an email to john@example.com with subject 'Welcome' and message 'Thank you for joining!'"
+)
 async def send_email(
     context: RunContext,  # type: ignore
     to_email: str,
@@ -19,6 +21,16 @@ async def send_email(
     Send an email using SendGrid. Prefer the business-stored SendGrid API key (via /full),
     otherwise fall back to the server-wide SEND_GRID environment variable.
     business_id may be inferred from room metadata if not provided.
+    
+    Args:
+        to_email: The recipient's email address (required)
+        subject: The email subject line (required)
+        message: The email message body (required)
+        business_id: The business ID (optional, will be extracted from room context if not provided)
+        cc_email: Optional CC email address
+    
+    Returns:
+        Success message if email sent, or error message if failed
     """
     try:
         backend_url = os.getenv("BACKEND_URL", "https://voxa-smoky.vercel.app")

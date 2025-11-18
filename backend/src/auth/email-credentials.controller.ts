@@ -17,6 +17,11 @@ export class EmailCredentialsController {
     @Body() body: { businessId: string; email: string; apiKey?: string },
     @Req() req: Request,
   ) {
+    // Validate body exists
+    if (!body || typeof body !== 'object') {
+      return { success: false, verified: false, message: 'Invalid request body' };
+    }
+
     // Rate limit by IP
     const ip = (req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown') as string;
     const key = `verify:${ip}`;
@@ -31,7 +36,13 @@ export class EmailCredentialsController {
     if (entry.count > VERIFY_MAX) {
       return { success: false, verified: false, message: 'Too many verification attempts, please try again later' };
     }
-    const { businessId, email, apiKey } = body;
+    
+    const { businessId, email, apiKey } = body || {};
+    
+    // Validate required fields
+    if (!businessId || !email) {
+      return { success: false, verified: false, message: 'Missing required fields: businessId and email are required' };
+    }
 
     // If an apiKey was provided by the user, verify and save it (encrypted).
     if (apiKey && apiKey.trim()) {
