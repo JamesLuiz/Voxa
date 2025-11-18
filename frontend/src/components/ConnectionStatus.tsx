@@ -49,17 +49,42 @@ export function ConnectionStatus({ isCallActive, className }: ConnectionStatusPr
     const checkForAgent = () => {
       try {
         const participants = Array.from((room as any)?.participants?.values() || []);
+        const localParticipant = (room as any)?.localParticipant;
+        const localIdentity = localParticipant?.identity || "";
+        
         const remoteParticipants = participants.filter((p: any) => {
           const identity = p?.identity || "";
-          return identity && identity !== (room as any)?.localParticipant?.identity;
+          return identity && identity !== localIdentity;
         });
 
-        // Check if any remote participant is the agent (usually has specific identity pattern)
+        // Check if any remote participant is the agent
+        // Agents typically:
+        // 1. Have identity containing "agent" or similar
+        // 2. OR have audio tracks published (agents publish audio)
+        // 3. OR are any remote participant (if only one remote, likely the agent)
         const agentParticipant = remoteParticipants.find((p: any) => {
           const identity = (p?.identity || "").toLowerCase();
-          return identity.includes("agent") || identity.includes("assistant") || identity.includes("voxa");
+          
+          // Check identity patterns
+          if (identity.includes("agent") || identity.includes("assistant") || identity.includes("voxa")) {
+            return true;
+          }
+          
+          // Check if participant has audio tracks (agents publish audio)
+          try {
+            const tracks = Array.from((p as any)?.audioTrackPublications?.values() || []);
+            if (tracks.length > 0) {
+              return true;
+            }
+          } catch (e) {
+            // Ignore errors checking tracks
+          }
+          
+          return false;
         });
 
+        // If we have remote participants, assume one is the agent
+        // (In a typical call, there's the user and the agent)
         if (agentParticipant || remoteParticipants.length > 0) {
           setHasAgent(true);
           setStage("agent_connected");
@@ -77,11 +102,36 @@ export function ConnectionStatus({ isCallActive, className }: ConnectionStatusPr
 
     // Set up listeners
     const handleParticipantConnected = (participant: any) => {
-      const identity = (participant?.identity || "").toLowerCase();
-      if (identity.includes("agent") || identity.includes("assistant") || identity.includes("voxa")) {
+      const localParticipant = (room as any)?.localParticipant;
+      const localIdentity = localParticipant?.identity || "";
+      const participantIdentity = participant?.identity || "";
+      
+      // Skip if this is the local participant
+      if (participantIdentity === localIdentity) {
+        return;
+      }
+      
+      // Check if this participant is likely the agent
+      const identity = participantIdentity.toLowerCase();
+      const isAgent = 
+        identity.includes("agent") || 
+        identity.includes("assistant") || 
+        identity.includes("voxa") ||
+        // Check if participant has audio tracks (agents publish audio)
+        (() => {
+          try {
+            const tracks = Array.from((participant as any)?.audioTrackPublications?.values() || []);
+            return tracks.length > 0;
+          } catch {
+            return false;
+          }
+        })();
+      
+      if (isAgent) {
         setHasAgent(true);
         setStage("agent_connected");
       } else {
+        // Re-check all participants
         checkForAgent();
       }
     };
@@ -91,8 +141,11 @@ export function ConnectionStatus({ isCallActive, className }: ConnectionStatusPr
     };
 
     const handleConnected = () => {
-      setStage("waiting_for_assistant");
-      checkForAgent();
+      // Immediately check for agent when room connects
+      // Use a small delay to ensure participants are fully loaded
+      setTimeout(() => {
+        checkForAgent();
+      }, 500);
     };
 
     const handleDisconnected = (reason?: string) => {
@@ -131,8 +184,8 @@ export function ConnectionStatus({ isCallActive, className }: ConnectionStatusPr
       (room as any).on("reconnecting", handleReconnecting);
     }
 
-    // Periodic check for agent (fallback)
-    const intervalId = setInterval(checkForAgent, 2000);
+    // Periodic check for agent (fallback) - check every second
+    const intervalId = setInterval(checkForAgent, 1000);
 
     return () => {
       clearTimeout(timeoutId);
