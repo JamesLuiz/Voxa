@@ -129,17 +129,28 @@ async def search_web(
     safe_search: bool = True,
 ) -> str:
     """
-    Search the web using DuckDuckGo with enhanced features.
+    Search the web using DuckDuckGo with enhanced features. 
+    
+    IMPORTANT: When you use this tool, you MUST read and use the search results in your response. 
+    Don't just search and ignore the results - extract key information and incorporate it naturally.
     
     Args:
-        query: The search query string
+        query: The search query string (be specific for better results)
         max_results: Maximum number of results to return (default: 10, max: 20)
-        extract_content: Whether to extract full content from top results (default: True)
+        extract_content: Whether to extract full content from top results (default: True) - recommended for detailed answers
         region: Region code for localized results (e.g., 'us-en', 'uk-en', 'de-de')
         safe_search: Enable safe search filtering (default: True)
     
     Returns:
-        JSON string with structured search results including titles, URLs, snippets, dates, and extracted content.
+        JSON string with structured search results including:
+        - titles: Article/page titles
+        - urls: Source URLs
+        - snippets: Brief summaries from search results
+        - extracted_content: Full content from top 3 results (if extract_content=True)
+        - summary: A formatted summary of all results
+        
+    Usage: After calling this tool, parse the JSON response and use the information found to answer the user's question.
+    Cite sources when relevant: "According to [title from results]..." or "I found that [information from results]..."
     """
     try:
         # Validate and refine query
@@ -209,12 +220,10 @@ async def search_web(
             })
         
         if not raw_results:
-            return json.dumps({
-                "query": query,
-                "refined_query": refined_query,
-                "results": [],
-                "message": "No results found for this query."
-            })
+            # Even if no results, return a structured response that the agent can work with
+            # Don't say "no results" - let the agent try to help anyway
+            logger.debug(f"No raw results for query: '{query}', but continuing with empty results")
+            raw_results = []
         
         # Process and validate results
         processed_results = []
@@ -222,37 +231,65 @@ async def search_web(
             if not isinstance(result, dict):
                 continue
             
-            # Validate relevance
-            if not _validate_result(result, query):
-                continue
+            # Less strict validation - include results even if relevance is lower
+            # This ensures we have something to work with
+            relevance_score = 0.0
+            if _validate_result(result, query):
+                relevance_score = 1.0
+            else:
+                # Still include if it has some basic info
+                title = result.get('title', '').lower()
+                body = result.get('body', '').lower()
+                query_lower = query.lower()
+                if any(term in title or term in body for term in query_lower.split()[:3]):
+                    relevance_score = 0.5  # Lower relevance but still useful
             
             processed_result = {
                 "title": result.get('title', 'No title'),
                 "url": result.get('href', ''),
                 "snippet": result.get('body', ''),
                 "date": result.get('date', ''),
+                "relevance": relevance_score,
             }
             
             # Extract full content if requested (for top 3 results only)
-            if extract_content and len(processed_results) < 3:
-                content = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    _extract_content_from_url,
-                    processed_result['url']
-                )
-                if content:
-                    processed_result['extracted_content'] = content[:1500]  # Limit extracted content
+            if extract_content and len(processed_results) < 3 and processed_result['url']:
+                try:
+                    content = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        _extract_content_from_url,
+                        processed_result['url']
+                    )
+                    if content:
+                        processed_result['extracted_content'] = content[:1500]  # Limit extracted content
+                except Exception as e:
+                    logger.debug(f"Failed to extract content from {processed_result['url']}: {e}")
+                    # Continue without extracted content
             
             processed_results.append(processed_result)
         
-        # Create structured response
+        # Sort by relevance if we have relevance scores
+        if processed_results and any(r.get('relevance') for r in processed_results):
+            processed_results.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+        
+        # Create structured response - always provide something useful
+        if processed_results:
+            summary = _summarize_results(processed_results, query)
+            message = f"Found {len(processed_results)} result(s) for your query. Use the information below to answer the user's question."
+        else:
+            # Even with no results, provide guidance
+            summary = f"Limited results for '{query}'. Use your knowledge to provide a helpful response based on general information about the topic."
+            message = "No specific search results found, but you can still provide helpful information based on your knowledge."
+        
         response_data = {
             "query": query,
             "refined_query": refined_query,
             "total_results": len(processed_results),
             "results": processed_results,
-            "summary": _summarize_results(processed_results, query) if processed_results else "No results found.",
-            "timestamp": datetime.now().isoformat()
+            "summary": summary,
+            "message": message,
+            "timestamp": datetime.now().isoformat(),
+            "note": "ALWAYS use the information in 'results' and 'summary' fields to answer the user's question. Even if results are limited, extract and use whatever information is available."
         }
         
         # Cache the results
