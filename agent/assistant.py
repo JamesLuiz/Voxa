@@ -30,8 +30,6 @@ class Assistant(Agent):
             llm=google.beta.realtime.RealtimeModel(
                 voice="Aoede",
                 temperature=0.6,  # Reduced from 0.8 for faster, more focused responses
-                # Enable response optimization for faster replies
-                response_modalities=["audio", "text"],
             ),
             tools=[
                 get_weather,

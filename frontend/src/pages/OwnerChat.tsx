@@ -17,7 +17,6 @@ import "@livekit/components-styles";
 import { GridLayout, ParticipantTile, TrackToggle, useRoomContext } from "@livekit/components-react";
 import { Track, DataPacket_Kind } from "livekit-client";
 import { LocalParticipant } from "livekit-client";
-import { ConnectionStatus } from "@/components/ConnectionStatus";
 const API_BASE = import.meta.env.VITE_API_URL ;
 
 
@@ -32,6 +31,8 @@ const OwnerChat = () => {
   const [currentUserEmail, setCurrentUserEmail] = useState<string | undefined>(undefined);
   const [errorBanner, setErrorBanner] = useState<string>("");
   const [reconnectOffer, setReconnectOffer] = useState<boolean>(false);
+  const [callStage, setCallStage] = useState<'idle' | 'starting' | 'waiting' | 'connected' | 'error'>('idle');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
 
   useEffect(() => {
     // Fetch business info for owner
@@ -54,6 +55,9 @@ const OwnerChat = () => {
 
   const handleStartCall = async () => {
     setIsConnecting(true);
+    setCallStage('starting');
+    setConnectionError(null);
+    setErrorBanner("");
     try {
       let userName: string | undefined = undefined;
       let userEmail: string | undefined = undefined;
@@ -117,6 +121,7 @@ const OwnerChat = () => {
       
       setLivekitInfo(null);
       setIsCallActive(false);
+      setCallStage('waiting');
       
       await new Promise(resolve => setTimeout(resolve, 100));
       
@@ -138,7 +143,10 @@ const OwnerChat = () => {
       console.error('Failed to start call:', e);
       setIsCallActive(false);
       setLivekitInfo(null);
-      setErrorBanner('Could not start the call. Check your connection and try again.');
+      setCallStage('error');
+      const errorMsg = e instanceof Error ? e.message : 'Could not start the call. Check your connection and try again.';
+      setConnectionError(errorMsg);
+      setErrorBanner(errorMsg);
     } finally {
       setIsConnecting(false);
     }
@@ -268,16 +276,30 @@ const OwnerChat = () => {
                   Talk to your business assistant
                 </p>
               </div>
+              {callStage === 'waiting' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-center gap-2 text-primary">
+                    <div className="w-4 h-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                    <span className="text-sm font-medium">Waiting for assistant to join...</span>
+                  </div>
+                </div>
+              )}
+              {callStage === 'error' && connectionError && (
+                <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">
+                  <p className="font-medium">Connection Error</p>
+                  <p className="text-xs mt-1">{connectionError}</p>
+                </div>
+              )}
               <Button
                 size="lg"
                 className="gap-2 sm:gap-3 text-base sm:text-lg px-6 py-5 sm:px-8 sm:py-6 rounded-full w-full sm:w-auto"
                 onClick={handleStartCall}
-                disabled={isConnecting}
+                disabled={isConnecting || callStage === 'waiting'}
               >
-                {isConnecting ? (
+                {isConnecting || callStage === 'waiting' ? (
                   <>
                     <div className="w-4 h-4 sm:w-5 sm:h-5 border-2 border-primary-foreground/30 border-t-primary-foreground rounded-full animate-spin" />
-                    Connecting...
+                    {callStage === 'waiting' ? 'Waiting for assistant...' : 'Connecting...'}
                   </>
                 ) : (
                   <>
@@ -289,6 +311,14 @@ const OwnerChat = () => {
             </div>
           ) : (
             <div className="w-full animate-fade-in">
+              {callStage === 'connected' && (
+                <div className="mb-2 text-center">
+                  <div className="inline-flex items-center gap-2 text-sm text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/20 px-3 py-1.5 rounded-full">
+                    <div className="w-2 h-2 bg-green-600 dark:bg-green-400 rounded-full animate-pulse" />
+                    <span className="font-medium">Agent Connected</span>
+                  </div>
+                </div>
+              )}
               {livekitInfo && (
                 <div className="rounded-xl border border-border overflow-hidden">
                   <LiveKitRoom
@@ -299,11 +329,16 @@ const OwnerChat = () => {
                     audio
                     video
                     style={{ height: "auto", minHeight: 280 }}
+                    onConnected={() => {
+                      setCallStage('connected');
+                      setConnectionError(null);
+                    }}
                     onDisconnected={(reason) => {
                       // eslint-disable-next-line no-console
                       console.log('Room disconnected:', reason);
                       setIsCallActive(false);
                       setLivekitInfo(null);
+                      setCallStage('idle');
                       try {
                         sessionStorage.removeItem('voxa_call_active');
                         sessionStorage.removeItem('voxa_pending_text');
@@ -311,8 +346,14 @@ const OwnerChat = () => {
                         // ignore
                       }
                     }}
+                    onError={(error) => {
+                      // eslint-disable-next-line no-console
+                      console.error('LiveKit room error:', error);
+                      setCallStage('error');
+                      setConnectionError(error?.message || 'Connection error occurred');
+                      setErrorBanner(error?.message || 'Connection error occurred');
+                    }}
                   >
-                    <ConnectionStatus isCallActive={isCallActive} className="m-2 sm:m-3" />
                     <RoleContextAnnouncer 
                       role="owner" 
                       businessId={businessId} 

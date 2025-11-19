@@ -35,11 +35,11 @@ const Splash = () => {
   // Navigate once both conditions are met: logo loaded AND minimum display time elapsed
   useEffect(() => {
     if (logoLoaded && minDisplayTimeElapsed) {
-      const timer = setTimeout(() => {
-        navigate("/login");
+    const timer = setTimeout(() => {
+  navigate("/login");
       }, 300); // Small delay for smooth transition
 
-      return () => clearTimeout(timer);
+    return () => clearTimeout(timer);
     }
   }, [logoLoaded, minDisplayTimeElapsed, navigate]);
 

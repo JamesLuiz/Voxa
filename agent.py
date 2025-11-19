@@ -206,14 +206,16 @@ async def collect_customer_info_if_needed(session: AgentSession, ctx, room_name:
 
 # ------------------ ENTRYPOINT ------------------
 async def entrypoint(ctx: agents.JobContext):
-    logger.debug(f"Agent joining room: {ctx.room.name}")
+    room_name = getattr(ctx.room, 'name', 'unknown')
+    logger.info(f"Agent entrypoint called for room: {room_name}")
+    logger.debug(f"Agent joining room: {room_name}")
     session = None
     # Allow runtime overrides provided via data channel (e.g., role_context)
     runtime_overrides: dict = {}
     
     try:
         # Setup disconnect handler to clean up properly
-        async def handle_participant_disconnected(participant):
+        def handle_participant_disconnected(participant):
             """Handle when a participant disconnects"""
             try:
                 identity = getattr(participant, 'identity', 'unknown')
@@ -222,7 +224,7 @@ async def entrypoint(ctx: agents.JobContext):
             except Exception as e:
                 logger.debug(f"Error handling participant disconnect: {e}")
         
-        async def handle_participant_connected(participant):
+        def handle_participant_connected(participant):
             """Handle when a participant connects/reconnects"""
             try:
                 identity = getattr(participant, 'identity', 'unknown')
@@ -339,6 +341,7 @@ async def entrypoint(ctx: agents.JobContext):
         # ALWAYS fetch business context immediately if we have businessId or slug
         # This ensures the agent has ALL business details (name, description, products, policies, etc.) from the start
         # This applies to ALL roles: owners, customers, and general users
+        # OPTIMIZATION: Parallelize business context and owner profile fetching for owners
         identifier_to_fetch = None
         if business_id:
             identifier_to_fetch = business_id
@@ -357,7 +360,13 @@ async def entrypoint(ctx: agents.JobContext):
                     except Exception:
                         pass
 
-                business_context_result = await get_business_context(mock_ctx, identifier_to_fetch)
+                # OPTIMIZATION: Use asyncio.create_task for parallel execution if owner
+                if is_owner:
+                    # Fetch business context and owner profile in parallel
+                    business_task = asyncio.create_task(get_business_context(mock_ctx, identifier_to_fetch))
+                    business_context_result = await business_task
+                else:
+                    business_context_result = await get_business_context(mock_ctx, identifier_to_fetch)
                 if business_context_result:
                     import json as _json
                     try:
@@ -492,7 +501,7 @@ async def entrypoint(ctx: agents.JobContext):
     biz_description = business_context.get('description', '') if isinstance(business_context, dict) else ''
     biz_products = business_context.get('products', []) if isinstance(business_context, dict) else []
     biz_policies = business_context.get('policies', '') if isinstance(business_context, dict) else ''
-    
+
     formatted_instruction = AGENT_INSTRUCTION.format(
         business_name=biz_name,
         business_description=biz_description,
@@ -524,14 +533,20 @@ async def entrypoint(ctx: agents.JobContext):
     session = AgentSession()
 
     # 5. Start the session with room, agent, and input options (CRITICAL ORDER)
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(instructions=formatted_instruction),
-        room_input_options=RoomInputOptions(
-            video_enabled=True,
-            noise_cancellation=noise_cancellation.BVC(),
-        ),
-    )
+    try:
+        logger.info(f"Starting agent session for room: {room_name}, role: {user_role}")
+        await session.start(
+            room=ctx.room,
+            agent=Assistant(instructions=formatted_instruction),
+            room_input_options=RoomInputOptions(
+                video_enabled=True,
+                noise_cancellation=noise_cancellation.BVC(),
+            ),
+        )
+        logger.info(f"Agent session started successfully for room: {room_name}")
+    except Exception as e:
+        logger.error(f"Failed to start agent session for room {room_name}: {e}")
+        raise
 
     # Fetch owner profile for owners to get name - do this early
     # Also check if business context already includes owner info
@@ -547,6 +562,7 @@ async def entrypoint(ctx: agents.JobContext):
             logger.info(f"Using owner info from business context: {owner_name}")
     
     # If we don't have owner info yet, try fetching it
+    # OPTIMIZATION: Fetch owner profile in parallel with business context if not already available
     if is_owner and (not owner_info or not owner_name):
         try:
             from tools import get_owner_profile
@@ -558,32 +574,35 @@ async def entrypoint(ctx: agents.JobContext):
                 except Exception:
                     pass
             
-            # Try multiple methods to get owner info
+            # Try multiple methods to get owner info - fetch in parallel if possible
             owner_email = metadata.get('userEmail') or metadata.get('ownerEmail') or metadata.get('email')
-            if owner_email:
-                try:
-                    owner_res = await get_owner_profile(mock_ctx, owner_email)
-                    import json as _json
-                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
-                    if isinstance(parsed, dict) and parsed:
-                        owner_info = parsed
-                        owner_name = parsed.get('name')
-                        logger.info(f"Fetched owner profile by email: {owner_name}")
-                except Exception as e:
-                    logger.debug(f"Could not fetch owner profile by email: {e}")
+            owner_tasks = []
             
-            # Also try fetching by business ID if we have it
-            if (not owner_info or not owner_name) and business_id:
+            if owner_email:
+                owner_tasks.append(get_owner_profile(mock_ctx, owner_email))
+            
+            if business_id:
+                owner_tasks.append(get_owner_profile(mock_ctx, business_id))
+            
+            # Execute owner profile fetches in parallel
+            if owner_tasks:
                 try:
-                    owner_res = await get_owner_profile(mock_ctx, business_id)
+                    results = await asyncio.gather(*owner_tasks, return_exceptions=True)
                     import json as _json
-                    parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
-                    if isinstance(parsed, dict) and parsed:
-                        owner_info = parsed
-                        owner_name = parsed.get('name')
-                        logger.info(f"Fetched owner profile by businessId: {owner_name}")
+                    for owner_res in results:
+                        if isinstance(owner_res, Exception):
+                            continue
+                        try:
+                            parsed = _json.loads(owner_res) if isinstance(owner_res, str) else owner_res
+                            if isinstance(parsed, dict) and parsed and parsed.get('name'):
+                                owner_info = parsed
+                                owner_name = parsed.get('name')
+                                logger.info(f"Fetched owner profile: {owner_name}")
+                                break
+                        except Exception:
+                            continue
                 except Exception as e:
-                    logger.debug(f"Could not fetch owner profile by businessId: {e}")
+                    logger.debug(f"Could not fetch owner profile in parallel: {e}")
         except Exception as e:
             logger.debug(f"Could not fetch owner profile: {e}")
     
@@ -600,7 +619,57 @@ async def entrypoint(ctx: agents.JobContext):
     # This ensures we have the correct role information from the frontend
 
     # 6. Connect to the room (IMPORTANT - this was missing!)
-    await ctx.connect()
+    # OPTIMIZATION: Set room metadata with business_id immediately for tool access
+    try:
+        await ctx.connect()
+        logger.info(f"Agent connected to room: {room_name}")
+        
+        # Wait briefly for participants to join (especially for general rooms)
+        # This ensures the agent is ready when the user connects
+        logger.info(f"Waiting for participants to join room: {room_name}")
+        max_wait_for_participants = 10  # Wait up to 10 seconds
+        waited = 0
+        while waited < max_wait_for_participants:
+            try:
+                if hasattr(ctx.room, 'remote_participants'):
+                    remote_parts = getattr(ctx.room, 'remote_participants', {})
+                    if isinstance(remote_parts, dict) and len(remote_parts) > 0:
+                        logger.info(f"Found {len(remote_parts)} participant(s) in room: {room_name}")
+                        break
+                if hasattr(ctx.room, 'participants'):
+                    parts = getattr(ctx.room, 'participants', {})
+                    if isinstance(parts, dict):
+                        remote_count = len([p for p in parts.values() if hasattr(p, 'identity') and 'agent' not in str(p.identity).lower()])
+                        if remote_count > 0:
+                            logger.info(f"Found {remote_count} participant(s) in room: {room_name}")
+                            break
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+            waited += 0.5
+    except Exception as e:
+        logger.error(f"Failed to connect agent to room {room_name}: {e}")
+        raise
+    
+    # Ensure business_id is in room metadata for tools to access (if available)
+    try:
+        if business_id and hasattr(ctx.room, 'set_metadata'):
+            import json as _json
+            current_meta = getattr(ctx.room, 'metadata', {})
+            if isinstance(current_meta, str):
+                try:
+                    current_meta = _json.loads(current_meta)
+                except:
+                    current_meta = {}
+            if not isinstance(current_meta, dict):
+                current_meta = {}
+            current_meta['businessId'] = business_id
+            if isinstance(metadata, dict):
+                current_meta.update(metadata)
+            await ctx.room.set_metadata(_json.dumps(current_meta))
+            logger.debug(f"Set room metadata with businessId: {business_id}")
+    except Exception as e:
+        logger.debug(f"Could not set room metadata: {e}")
         
     # 7. Setup timeout state for monitoring (must be before data handler)
     # Timeout state removed - no longer monitoring timeouts
@@ -1265,8 +1334,9 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info(f"Generated welcome message for {role}: {welcome_msg[:100]}...")
                 
                 # Wait for at least one participant to connect before sending welcome
-                max_wait = 5  # Maximum wait time in seconds
-                wait_interval = 0.5
+                # Reduced wait time for faster response
+                max_wait = 2  # Reduced from 5 to 2 seconds
+                wait_interval = 0.2  # Reduced from 0.5 to 0.2 for faster checks
                 waited = 0
                 participants_connected = False
                 
@@ -1297,7 +1367,7 @@ async def entrypoint(ctx: agents.JobContext):
                         logger.info(f"Welcome message sent via voice for {role}")
                 except Exception as e:
                     logger.warning(f"Welcome message generation error: {e}")
-                
+                    
                 # Also publish welcome message to data channel
                 try:
                     import json as _json
@@ -1435,11 +1505,31 @@ async def entrypoint(ctx: agents.JobContext):
 
        
         # This allows the agent to stay alive for multiple connection cycles
+        # Keep the entrypoint running and wait for events
         try:
+            logger.info(f"Agent entrypoint active for room: {room_name}, waiting for events...")
             # Keep the entrypoint running until room closes
-            await asyncio.sleep(0.1)  # Small sleep to allow event loop processing
+            # Use a longer sleep and check for room state periodically
+            # IMPORTANT: The agent must stay alive to handle incoming messages
+            while True:
+                await asyncio.sleep(1.0)  # Check every second
+                # Check if room is still active
+                try:
+                    if hasattr(ctx.room, 'state'):
+                        room_state = getattr(ctx.room, 'state', None)
+                        if room_state in ('disconnected', 'closed'):
+                            logger.info(f"Room {room_name} disconnected, exiting entrypoint")
+                            break
+                    # Also check if we have any participants
+                    if hasattr(ctx.room, 'remote_participants'):
+                        remote_parts = getattr(ctx.room, 'remote_participants', {})
+                        if isinstance(remote_parts, dict) and len(remote_parts) == 0:
+                            # No participants, but keep waiting (they might reconnect)
+                            pass
+                except Exception:
+                    pass
         except asyncio.CancelledError:
-            logger.debug("Entrypoint cancelled")
+            logger.debug(f"Entrypoint cancelled for room: {room_name}")
         
         except Exception as e:
             try:
